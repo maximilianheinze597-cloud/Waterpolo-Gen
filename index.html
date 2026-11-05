@@ -1,0 +1,1446 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wasserball Arena</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#0a182b;color:#e8eef8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+#cv{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+.overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 30%,rgba(20,70,140,.75),rgba(5,12,25,.94));z-index:5;padding:16px;overflow:auto}
+.overlay.hidden{display:none}
+.card{background:rgba(12,24,45,.96);border:1px solid #27446f;border-radius:16px;padding:24px 28px;max-width:560px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.card.wide{max-width:760px;max-height:90vh;overflow:auto}
+h1{margin:0 0 4px;font-size:30px}h2{margin:0 0 12px}
+.sub{margin:0 0 18px;color:#9fb4d3;font-size:14px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#9fb4d3;text-transform:uppercase;letter-spacing:.05em}
+select{background:#12284a;color:#fff;border:1px solid #2d4d7d;border-radius:8px;padding:9px;font-size:14px}
+button{background:#17325c;color:#fff;border:1px solid #2d4d7d;border-radius:10px;padding:11px 18px;font-size:15px;cursor:pointer}
+button:hover{background:#1f4380}
+button.primary{background:#1e8f4e;border-color:#2fb86a;font-weight:700}
+button.primary:hover{background:#25ab5d}
+.btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.hint{color:#7d93b5;font-size:12px;margin:14px 0 0}
+#preview{display:flex;justify-content:center;gap:18px;margin-top:16px;align-items:center}
+.cap{width:44px;height:44px;border-radius:50%;border:2px solid #000;display:flex;align-items:center;justify-content:center;font-weight:800;position:relative;overflow:hidden}
+.pv{text-align:center;font-size:12px;color:#9fb4d3}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td{padding:7px 8px;border-bottom:1px solid #1d3558;vertical-align:top}td:first-child{white-space:nowrap;font-weight:700;color:#ffd166;width:34%}
+.bigscore{font-size:54px;font-weight:800;text-align:center;margin:8px 0}
+.stat{display:grid;grid-template-columns:1fr auto 1fr;gap:6px;text-align:center;padding:5px 0;border-bottom:1px solid #1d3558}
+
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="menu" class="overlay">
+  <div class="card">
+    <h1>🤽 Wasserball Arena</h1>
+    <p class="sub">Vollständiges Wasserballspiel mit Regeln, Schiedsrichtern, Strafwurf und Penaltyschießen</p>
+    <div class="grid">
+      <label>Dein Team<select id="selHome"></select></label>
+      <label>Gegner<select id="selAway"></select></label>
+      <label>Kappenfarbe<select id="selCap"></select></label>
+      <label>Kappen-Design<select id="selStyle"></select></label>
+      <label>Schwierigkeit<select id="selDiff"></select></label>
+      <label>Viertel-Länge<select id="selLen"></select></label>
+    </div>
+    <div id="preview"></div>
+    <div class="btns">
+      <button id="btnStart" class="primary">▶ Spiel starten</button>
+      <button id="btnRules">📖 Regeln</button>
+      <button id="btnControls">🎮 Steuerung</button>
+    </div>
+    <p class="hint">Heim spielt in Weiß/Farbe, Gast in Blau, Torhüter immer in Rot (Nr. 1 und 13).</p>
+  </div>
+</div>
+
+<div id="info" class="overlay hidden"><div class="card wide"><h2 id="infoTitle"></h2><div id="infoBody"></div><div class="btns"><button id="btnInfoClose" class="primary">Zurück</button></div></div></div>
+
+<div id="pause" class="overlay hidden"><div class="card">
+  <h2>⏸ Pause</h2>
+  <div class="btns"><button id="btnResume" class="primary">Weiter</button><button id="btnSound">🔊 Ton an</button><button id="btnQuit">Zum Menü</button></div>
+</div></div>
+
+<div id="result" class="overlay hidden"><div class="card wide">
+  <h2 id="resTitle"></h2><div id="resScore" class="bigscore"></div><div id="resStats"></div>
+  <div class="btns"><button id="btnAgain" class="primary">Nochmal</button><button id="btnMenu">Menü</button></div>
+</div></div>
+
+<script>
+// Hilfsfunktionen: Mathe, Zufall, Geometrie
+(function () {
+  const WP = (globalThis.WP = globalThis.WP || {});
+
+  // Seed-fähiger Zufallsgenerator (mulberry32)
+  function makeRng(seed) {
+    let a = seed >>> 0;
+    const f = function () {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    return f;
+  }
+
+  const U = {
+    makeRng,
+    clamp: (v, a, b) => (v < a ? a : v > b ? b : v),
+    lerp: (a, b, t) => a + (b - a) * t,
+    dist: (a, b) => Math.hypot(a.x - b.x, a.y - b.y),
+    dist2: (x1, y1, x2, y2) => Math.hypot(x1 - x2, y1 - y2),
+    angle: (from, to) => Math.atan2(to.y - from.y, to.x - from.x),
+    angDiff(a, b) {
+      let d = a - b;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      return d;
+    },
+    // Abstand Punkt p zur Strecke a-b
+    distToSegment(px, py, ax, ay, bx, by) {
+      const dx = bx - ax, dy = by - ay;
+      const l2 = dx * dx + dy * dy;
+      let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+    },
+    pick: (rng, arr) => arr[Math.floor(rng() * arr.length) % arr.length],
+    fmtClock(sec) {
+      sec = Math.max(0, Math.ceil(sec));
+      const m = Math.floor(sec / 60), s = sec % 60;
+      return m + ':' + (s < 10 ? '0' : '') + s;
+    },
+  };
+  WP.U = U;
+})();
+
+</script>
+<script>
+// Konfiguration: Spielfeld, Regeln, Teams, Kappen, Rollen, Schwierigkeit
+(function () {
+  const WP = (globalThis.WP = globalThis.WP || {});
+
+  WP.C = {
+    W: 30, H: 20,             // Becken in Metern (Herren: 30 x 20)
+    GOAL_W: 3, GOAL_H: 0.9,   // Tor 3 m breit, 0,9 m über Wasser
+    L2: 2, L5: 5, L6: 6,      // 2-m (rot), 5-m (gelb), 6-m (grün) Linie
+    PR: 0.42, BR: 0.11,       // Spieler- und Ballradius
+    SWIM: 3.2, SPRINT: 4.3,   // Schwimmtempo m/s (Arcade-skaliert)
+    QUARTER_S: 480,           // 8 Minuten Spielzeit pro Viertel
+    QUARTERS: 4,
+    SHOT_CLOCK: 30, SHOT_CLOCK_SHORT: 20,
+    EXCL_S: 20,               // Hinausstellung 20 s
+    BRUTAL_S: 240,            // Brutalität: 4 Minuten Ersatz-Sperre
+    MAX_FOULS: 3,             // 3 persönliche Fehler = Ausschluss fürs Spiel
+    TIMEOUTS: 2, TIMEOUT_S: 60,
+  };
+
+  // Kappenfarben (Heim = weiß, Gast = blau, Torhüter = rot, Nr. 1 und 13)
+  WP.CAPS = [
+    { id: 'white',  name: 'Weiß',    hex: '#f3f6fb', ink: '#14275c' },
+    { id: 'blue',   name: 'Blau',    hex: '#1f46c8', ink: '#ffffff' },
+    { id: 'navy',   name: 'Dunkelblau', hex: '#14246a', ink: '#ffffff' },
+    { id: 'red',    name: 'Rot',     hex: '#d7262e', ink: '#ffffff' },
+    { id: 'green',  name: 'Grün',    hex: '#1f9a4a', ink: '#ffffff' },
+    { id: 'yellow', name: 'Gelb',    hex: '#f2c81c', ink: '#222222' },
+    { id: 'black',  name: 'Schwarz', hex: '#1b1b20', ink: '#ffffff' },
+    { id: 'orange', name: 'Orange',  hex: '#ee7d1a', ink: '#ffffff' },
+  ];
+  WP.CAP_STYLES = [
+    { id: 'classic', name: 'Klassisch (einfarbig)' },
+    { id: 'stripe',  name: 'Längsstreifen' },
+    { id: 'panels',  name: 'Zweifarbig' },
+  ];
+  WP.GK_CAP = { hex: '#d7262e', ink: '#ffffff' };
+
+  // Rollen im Angriff: Position als Anteil (tiefe = Meter von der Torlinie, seite = -1..1)
+  WP.ROLES = {
+    GK: { name: 'Torwart',            short: 'TW', depth: 0.5, side: 0 },
+    CF: { name: 'Center (Lochspieler)', short: 'CF', depth: 2.6, side: 0 },
+    LW: { name: 'Außen links',        short: 'AL', depth: 2.3, side: -0.62 },
+    RW: { name: 'Außen rechts',       short: 'AR', depth: 2.3, side: 0.62 },
+    LD: { name: 'Distanz links',      short: 'DL', depth: 6.6, side: -0.38 },
+    RD: { name: 'Distanz rechts',     short: 'DR', depth: 6.6, side: 0.38 },
+    PT: { name: 'Punkt',              short: 'PT', depth: 8.6, side: 0 },
+  };
+  // Kappennummern: 1 Torwart, 2-7 Feldspieler, 8-12 Bank, 13 Ersatztorwart
+  WP.LINEUP = [
+    { num: 1, role: 'GK' }, { num: 2, role: 'LW' }, { num: 3, role: 'LD' },
+    { num: 4, role: 'PT' }, { num: 5, role: 'RD' }, { num: 6, role: 'RW' },
+    { num: 7, role: 'CF' },
+    { num: 8, role: 'CF' }, { num: 9, role: 'LD' }, { num: 10, role: 'RD' },
+    { num: 11, role: 'LW' }, { num: 12, role: 'RW' }, { num: 13, role: 'GK' },
+  ];
+
+  // Mannschaften (fiktive Spielernamen, nur Namen der Länder)
+  WP.TEAMS = [
+    { id: 'ger', name: 'Deutschland', short: 'GER', rating: 74, home: 'white', away: 'blue',  style: 'classic', names: ['Brandt','Kessler','Lindner','Voss','Hartmann','Reuter','Falk','Schuster','Amsel','Weigand','Roth','Seidel','Berger'] },
+    { id: 'hun', name: 'Ungarn',      short: 'HUN', rating: 90, home: 'white', away: 'blue',  style: 'stripe',  names: ['Nagy','Kovács','Tóth','Szabó','Horváth','Varga','Molnár','Farkas','Papp','Lakatos','Fekete','Balogh','Juhász'] },
+    { id: 'srb', name: 'Serbien',     short: 'SRB', rating: 92, home: 'white', away: 'blue',  style: 'panels',  names: ['Jovanović','Petrović','Nikolić','Ilić','Marković','Đorđević','Stojanović','Pavlović','Savić','Lazić','Kostić','Milić','Tomić'] },
+    { id: 'cro', name: 'Kroatien',    short: 'CRO', rating: 86, home: 'white', away: 'blue',  style: 'classic', names: ['Horvat','Kovačić','Babić','Marić','Jurić','Novak','Knežević','Vuković','Perić','Bošnjak','Kralj','Matić','Šarić'] },
+    { id: 'esp', name: 'Spanien',     short: 'ESP', rating: 88, home: 'white', away: 'blue',  style: 'stripe',  names: ['García','Martínez','López','Sánchez','Pérez','Gómez','Ruiz','Díaz','Moreno','Álvarez','Romero','Navarro','Torres'] },
+    { id: 'ita', name: 'Italien',     short: 'ITA', rating: 87, home: 'white', away: 'blue',  style: 'classic', names: ['Rossi','Russo','Ferrari','Esposito','Bianchi','Romano','Colombo','Ricci','Marino','Greco','Bruno','Gallo','Conti'] },
+    { id: 'gre', name: 'Griechenland',short: 'GRE', rating: 85, home: 'white', away: 'blue',  style: 'panels',  names: ['Papadopoulos','Nikolaou','Georgiou','Dimitriou','Ioannou','Pappas','Vasiliou','Karras','Mavros','Alexiou','Stavrou','Leontis','Fotiou'] },
+    { id: 'usa', name: 'USA',         short: 'USA', rating: 84, home: 'white', away: 'blue',  style: 'stripe',  names: ['Miller','Johnson','Davis','Wilson','Anderson','Taylor','Moore','Clark','Walker','Hall','Allen','Young','King'] },
+    { id: 'aus', name: 'Australien',  short: 'AUS', rating: 78, home: 'white', away: 'blue',  style: 'classic', names: ['Smith','Jones','Brown','Cooper','Reid','Hughes','Fraser','Murray','Webb','Carter','Dunn','Ellis','Grant'] },
+    { id: 'mne', name: 'Montenegro',  short: 'MNE', rating: 83, home: 'white', away: 'blue',  style: 'panels',  names: ['Vujović','Radović','Perović','Popović','Burić','Mitrović','Janković','Knežević','Brajović','Raičević','Šćepanović','Bećiri','Vlahović'] },
+  ];
+
+  WP.DIFFICULTY = {
+    easy:   { name: 'Leicht',   speed: 0.86, react: 0.55, aim: 0.55, gk: 0.45, steal: 0.55, foul: 0.7 },
+    normal: { name: 'Normal',   speed: 0.96, react: 0.8,  aim: 0.8,  gk: 0.7,  steal: 0.8,  foul: 1.0 },
+    hard:   { name: 'Schwer',   speed: 1.04, react: 1.0,  aim: 1.0,  gk: 0.92, steal: 1.0,  foul: 1.2 },
+  };
+
+  // Viertel-Länge in echten Sekunden (Spielzeit läuft entsprechend schneller)
+  WP.QUARTER_REAL = [
+    { id: 90,  name: 'Kurz (1,5 Min je Viertel)' },
+    { id: 180, name: 'Normal (3 Min je Viertel)' },
+    { id: 300, name: 'Lang (5 Min je Viertel)' },
+    { id: 480, name: 'Echtzeit (8 Min je Viertel)' },
+  ];
+
+  WP.RULES_TEXT = [
+    ['Spielfeld', 'Becken 30 × 20 m, Tore 3 m breit. Linien: 2 m (rot), 5 m (gelb), 6 m (grün) und Mittellinie (weiß).'],
+    ['Mannschaften', '7 Spieler im Wasser (1 Torwart + 6 Feldspieler), bis zu 13 im Kader. Kappen: Heim weiß, Gast blau, Torhüter rot (Nr. 1 und 13).'],
+    ['Spielzeit', '4 Viertel à 8 Minuten effektive Spielzeit (hier auf deine Wunschlänge skaliert). Seitenwechsel zur Halbzeit.'],
+    ['Schwimmduell', 'Jedes Viertel beginnt mit dem Sprint zum Ball in der Beckenmitte.'],
+    ['Angriffszeit', '30 Sekunden pro Angriff, nach Eckball, Hinausstellung oder Abpraller nur noch 20 Sekunden. Läuft sie ab, bekommt der Gegner den Ball.'],
+    ['Gewöhnliches Foul', 'Freiwurf für den Gegner. Innerhalb der 6-m-Zone darf nicht direkt aufs Tor geworfen werden – erst Pass oder Schwimmen über die 6-m-Linie.'],
+    ['Hinausstellung', 'Schweres Foul (Halten, Untertauchen, Spritzen): 20 Sekunden raus. Der Gegner spielt in Überzahl (6 gegen 5). Rückkehr nach 20 s, nach einem Tor oder bei Ballgewinn.'],
+    ['Persönliche Fehler', 'Beim 3. Fehler ist der Spieler für das Spiel gesperrt und wird nach der Hinausstellung durch einen Spieler der Bank ersetzt.'],
+    ['Strafwurf (5 m)', 'Ein Foul, das ein sicheres Tor innerhalb der 5-m-Zone verhindert, ergibt einen Strafwurf von der 5-m-Linie gegen den Torwart allein.'],
+    ['Brutalität', 'Absichtliche Tätlichkeit: roter Karton, 4 Minuten Sperre plus Strafwurf.'],
+    ['2-m-Regel', 'Angreifer ohne Ball dürfen nicht vor der 2-m-Linie stehen (Abseits) – Freiwurf für die Verteidigung.'],
+    ['Eckball', 'Lenkt die Verteidigung oder der Torwart den Ball über die eigene Torlinie, gibt es Eckball von der 2-m-Linie.'],
+    ['Torabwurf', 'Schießt der Angreifer über die Torlinie, bekommt der Torwart den Abwurf.'],
+    ['Torwart', 'Darf nur im eigenen Bereich mit beiden Händen spielen und die Mittellinie nicht überqueren.'],
+    ['Auszeit', 'Jede Mannschaft hat 2 Auszeiten à 1 Minute, nur im eigenen Ballbesitz.'],
+    ['Schiedsrichter', 'Zwei Schiedsrichter laufen an den Beckenseiten und zeigen mit Pfiff und Flagge in der Farbe des Ballbesitz-Teams an. Zwei Torrichter stehen an den Torlinien.'],
+    ['Entscheidungsschießen', 'Steht es nach vier Vierteln unentschieden, folgen 5-m-Penaltys (5 Schützen je Team, danach Sudden Death).'],
+  ];
+
+  WP.CONTROLS_TEXT = [
+    ['W A S D / Pfeiltasten', 'Schwimmen'],
+    ['Shift', 'Sprint (kostet Ausdauer)'],
+    ['Maus', 'Zielen'],
+    ['Linke Maustaste (halten)', 'Schuss – länger halten = mehr Kraft'],
+    ['Rechte Maustaste / E', 'Pass auf den Mitspieler in Zielrichtung'],
+    ['Leertaste', 'Ball stibitzen / Gegner bedrängen (Risiko: Foul!)'],
+    ['F', 'Schusstäuschung (lockt Verteidiger)'],
+    ['Q / Tab', 'Spieler wechseln (nächster zum Ball)'],
+    ['X', 'Auswechseln bei Spielunterbrechung'],
+    ['T', 'Auszeit (nur im eigenen Ballbesitz)'],
+    ['P / Esc', 'Pause'],
+    ['Strafwurf: Schütze', 'Maus zielen, Klick = Wurf'],
+    ['Strafwurf: Torwart', 'W / S oder ↑ / ↓ = Sprung nach oben / unten (vor dem Schuss drücken)'],
+  ];
+})();
+
+</script>
+<script>
+// Synthetische Sounds (WebAudio) – keine Dateien nötig
+(function () {
+  const WP = (globalThis.WP = globalThis.WP || {});
+  let ctx = null, master = null, crowdGain = null, enabled = true;
+
+  function init() {
+    if (ctx || typeof AudioContext === 'undefined') return;
+    try {
+      ctx = new AudioContext();
+      master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination);
+      // Publikum: gefiltertes Rauschen
+      const len = ctx.sampleRate * 2, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 700; f.Q.value = 0.5;
+      crowdGain = ctx.createGain(); crowdGain.gain.value = 0.05;
+      src.connect(f); f.connect(crowdGain); crowdGain.connect(master); src.start();
+    } catch (e) { ctx = null; }
+  }
+  function noise(dur, freq, vol, type) {
+    if (!ctx || !enabled) return;
+    const len = Math.floor(ctx.sampleRate * dur), buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const s = ctx.createBufferSource(); s.buffer = buf;
+    const f = ctx.createBiquadFilter(); f.type = type || 'lowpass'; f.frequency.value = freq;
+    const g = ctx.createGain(); g.gain.value = vol;
+    s.connect(f); f.connect(g); g.connect(master); s.start();
+  }
+  function tone(freq, dur, vol, type, vib) {
+    if (!ctx || !enabled) return;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type || 'sine'; o.frequency.value = freq;
+    if (vib) {
+      const l = ctx.createOscillator(), lg = ctx.createGain();
+      l.frequency.value = vib; lg.gain.value = freq * 0.03; l.connect(lg); lg.connect(o.frequency); l.start(); l.stop(ctx.currentTime + dur);
+    }
+    g.gain.setValueAtTime(vol, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+    o.connect(g); g.connect(master); o.start(); o.stop(ctx.currentTime + dur);
+  }
+
+  WP.Audio = {
+    init, resume() { if (ctx && ctx.state === 'suspended') ctx.resume(); },
+    setEnabled(v) { enabled = v; if (master) master.gain.value = v ? 0.5 : 0; },
+    isEnabled: () => enabled,
+    whistle(n) {
+      n = n || 1;
+      for (let i = 0; i < n; i++) setTimeout(() => tone(2750, 0.32, 0.25, 'sine', 38), i * 380);
+    },
+    splash(v) { noise(0.25, 1800, Math.min(0.35, 0.05 + (v || 1) * 0.04)); },
+    ball(v) { tone(180, 0.09, Math.min(0.4, 0.1 + (v || 1) * 0.02), 'triangle'); noise(0.06, 900, 0.12); },
+    post() { tone(620, 0.35, 0.3, 'square'); tone(930, 0.25, 0.12, 'sine'); },
+    save() { noise(0.12, 600, 0.3); tone(140, 0.12, 0.25, 'triangle'); },
+    horn() { tone(220, 1.1, 0.35, 'sawtooth'); tone(330, 1.1, 0.2, 'sawtooth'); },
+    goal() {
+      if (crowdGain) { crowdGain.gain.setTargetAtTime(0.22, ctx.currentTime, 0.05); crowdGain.gain.setTargetAtTime(0.05, ctx.currentTime + 2.2, 0.6); }
+      tone(440, 0.5, 0.2, 'square'); setTimeout(() => tone(660, 0.6, 0.2, 'square'), 180);
+    },
+    cheer(a) { if (crowdGain) { crowdGain.gain.setTargetAtTime(0.05 + (a || 0.08), ctx.currentTime, 0.1); crowdGain.gain.setTargetAtTime(0.05, ctx.currentTime + 1, 0.5); } },
+  };
+})();
+
+</script>
+<script>
+// Spiel-Kern: Zustand, Physik, Regeln, Schiedsrichter
+(function () {
+  const WP = globalThis.WP, C = WP.C, U = WP.U, G9 = 9.8;
+
+  class Game {
+    constructor(o) {
+      this.o = o;
+      this.rng = U.makeRng(o.seed || (Date.now() & 0xffffff));
+      this.diff = WP.DIFFICULTY[o.diff || 'normal'];
+      this.rate = C.QUARTER_S / (o.quarterReal || 180);
+      const A = WP.TEAMS[o.home], B = WP.TEAMS[o.away];
+      const capA = WP.CAPS.find(c => c.id === (o.cap || 'white')) || WP.CAPS[0];
+      let capB = WP.CAPS.find(c => c.id === 'blue');
+      if (capA.id === 'blue' || capA.id === 'navy') capB = WP.CAPS[0];
+      this.teams = [this.mkTeam(0, A, capA, o.style || 'classic'), this.mkTeam(1, B, capB, B.style)];
+      this.teams[0].dir = 1; this.teams[1].dir = -1;
+      this.players = this.teams[0].players.concat(this.teams[1].players);
+      this.ball = { x: 15, y: 10, z: 0, vx: 0, vy: 0, vz: 0, owner: null, flight: null, target: null, lastTeam: -1, lastPlayer: null, noPick: 0, shotTeam: -1, shotT: 99, tried: {} };
+      this.input = { mx: 0, my: 0, sprint: false, aimX: 15, aimY: 10, shootHeld: false, shootRelease: false, pass: false, tackle: false, fake: false, switchP: false, sub: false, timeout: false, dive: 0 };
+      this.charge = 0;
+      this.quarter = 0; this.clock = C.QUARTER_S; this.shotClock = C.SHOT_CLOCK; this.poss = -1;
+      this.phase = 'init'; this.pt = 0; this.rs = null; this.so = null; this.freeNoShot = false;
+      this.events = []; this.log = []; this.message = { text: '', t: 0 }; this.time = 0;
+      this.refs = [{ x: 15, y: -1.4, flag: null, ft: 0, point: null }, { x: 15, y: C.H + 1.4, flag: null, ft: 0, point: null }];
+      this.goalJudges = [{ w: 0 }, { w: 0 }];
+      this.winner = null; this.finished = false; this.lastGoalTeam = -1;
+      this.sel = null;
+      this.startQuarter(1);
+    }
+
+    mkTeam(idx, def, cap, style) {
+      const r = this.rng, base = def.rating / 100;
+      const players = WP.LINEUP.map((l, i) => {
+        const q = (v) => U.clamp(v * (0.88 + 0.2 * base) + (r() - 0.5) * 0.12, 0.6, 1.15);
+        return {
+          id: idx * 20 + i, team: idx, num: l.num, role: l.role, name: def.names[i % def.names.length],
+          gk: l.role === 'GK', x: 15, y: 10, vx: 0, vy: 0, face: 0, inPool: i < 7, excl: 0, perm: false, fouls: 0, st: 1,
+          attr: { spd: q(1), shoot: q(1), pass: q(1), def: q(1), str: q(1), gk: q(1) },
+          cd: 0, holdT: 0, aiT: 0, fakeT: 0, bite: 0, dive: 0, twoM: 0, press: 0, goals: 0, bench: i >= 7,
+        };
+      });
+      return { idx, def, cap, style, players, score: 0, timeouts: C.TIMEOUTS, dir: 1,
+        stats: { shots: 0, saves: 0, fouls: 0, excl: 0, pens: 0, poss: 0 } };
+    }
+
+    // ---------- Hilfen ----------
+    ownGoalX(t) { return this.teams[t].dir > 0 ? 0 : C.W; }
+    atkGoalX(t) { return this.teams[t].dir > 0 ? C.W : 0; }
+    pool(t) { return this.teams[t].players.filter(p => p.inPool); }
+    field(t) { return this.teams[t].players.filter(p => p.inPool && !p.gk); }
+    gkOf(t) { return this.teams[t].players.find(p => p.inPool && p.gk); }
+    ev(type, x, y, v) { if (this.events.length < 300) this.events.push({ type, x, y, v: v || 0 }); }
+    say(text, secs) { this.message = { text, t: secs || 2.2 }; this.log.unshift(text); if (this.log.length > 8) this.log.pop(); }
+
+    // ---------- Viertel / Anstoß ----------
+    startQuarter(q) {
+      this.quarter = q; this.clock = C.QUARTER_S;
+      if (q === 3) { this.teams[0].dir *= -1; this.teams[1].dir *= -1; }
+      for (let t = 0; t < 2; t++) {
+        const T = this.teams[t], gx = this.ownGoalX(t), d = T.dir;
+        const act = T.players.filter(p => p.inPool);
+        let k = 0; act.forEach(p => { p.x = gx + d * (p.gk ? 0.6 : 2.0); p.y = p.gk ? C.H / 2 : 3 + (k++) * 2.8; p.vx = p.vy = 0; p.face = d > 0 ? 0 : Math.PI; p.fakeT = 0; });
+        T.players.forEach(p => { if (p.excl > 0 && !p.perm) p.excl = Math.min(p.excl, C.EXCL_S); });
+      }
+      const b = this.ball; Object.assign(b, { x: 15, y: 10, z: 0, vx: 0, vy: 0, vz: 0, owner: null, flight: null, target: null, lastTeam: -1, lastPlayer: null });
+      this.poss = -1; this.shotClock = C.SHOT_CLOCK; this.freeNoShot = false; this.rs = null;
+      this.phase = 'swim'; this.pt = 2.6;
+      this.say(q === 1 ? 'Anwurf – Schwimmduell!' : q + '. Viertel – Schwimmduell!', 2.4);
+      this.sel = this.field(0).find(p => p.role === 'CF') || this.field(0)[0];
+    }
+
+    // ---------- Hauptupdate ----------
+    update(dt) {
+      this.time += dt;
+      if (this.message.t > 0) this.message.t -= dt;
+      this.updateRefs(dt);
+      const inp = this.input;
+      if (this.phase === 'shootout') { this.updateShootout(dt); this.clearInput(); return; }
+      if (this.phase === 'swim') { this.swimStep(dt); this.clearInput(); return; }
+      if (this.phase === 'goal') { this.pt -= dt; this.updateBall(dt); if (this.pt <= 0) this.afterGoal(); this.clearInput(); return; }
+      if (this.phase === 'break') { this.pt -= dt; if (this.pt <= 0) this.afterBreak(); this.clearInput(); return; }
+      if (this.phase === 'timeout') { this.pt -= dt; if (this.pt <= 0) { this.phase = 'restart'; this.rs.t = 0; } this.clearInput(); return; }
+      if (this.phase === 'over') return;
+
+      this.handleHumanSystem();
+      const play = this.phase === 'play';
+      if (this.rs) this.rs.t += dt;
+      if (play) {
+        this.clock -= dt * this.rate;
+        if (this.poss >= 0) { this.shotClock -= dt * this.rate; this.teams[this.poss].stats.poss += dt; }
+        this.ballTimers(dt);
+        for (const p of this.players) if (p.excl > 0) { p.excl -= dt * this.rate; if (p.excl <= 0) this.returnPlayer(p); }
+      }
+      this.updateHuman(dt);
+      this.aiAll(dt);
+      for (const p of this.players) { p.cd -= dt; p.fakeT -= dt; p.bite -= dt; p.press -= dt; p.dive -= dt; }
+      this.separate();
+      this.updateBall(dt);
+      if (play) this.rulesCheck(dt);
+      if (this.phase === 'restart' && this.rs) this.restartTimeout();
+      if (play && this.clock <= 0) this.endQuarter();
+      else if (play && this.poss >= 0 && this.shotClock <= 0) this.shotClockOut();
+      this.clearInput();
+    }
+    clearInput() { const i = this.input; i.shootRelease = i.pass = i.tackle = i.fake = i.switchP = i.sub = i.timeout = false; }
+    ballTimers(dt) { this.ball.shotT += dt; }
+
+    // ---------- Schiedsrichter ----------
+    updateRefs(dt) {
+      this.refs.forEach((r, i) => {
+        const bx = U.clamp(this.ball.x, 2, C.W - 2), pe = r.point ? r.point.x : bx;
+        const tx = this.phase === 'restart' || this.phase === 'goal' ? pe : bx;
+        r.x += (tx - r.x) * Math.min(1, dt * 1.6);
+        if (r.ft > 0) { r.ft -= dt; if (r.ft <= 0) { r.flag = null; r.point = null; } }
+      });
+      this.goalJudges.forEach(g => { if (g.w > 0) g.w -= dt; });
+    }
+    signal(awardTeam, x, y) {
+      const r = this.refs[y < C.H / 2 ? 0 : 1];
+      r.flag = this.teams[awardTeam].cap.hex; r.ft = 2.4; r.point = { x, y };
+      WP.Audio && WP.Audio.whistle(1); this.ev('whistle');
+    }
+
+    // ---------- Spielerbewegung ----------
+    moveP(p, dt, dx, dy, sprint) {
+      const len = Math.hypot(dx, dy);
+      let sp = p.gk ? 2.7 : C.SWIM;
+      if (sprint && !p.gk && p.st > 0.05) { sp = C.SPRINT; p.st -= dt * 0.16; } else p.st = Math.min(1, p.st + dt * 0.05);
+      sp *= p.attr.spd * (0.78 + 0.22 * p.st);
+      if (this.ball.owner === p) sp *= 0.88;
+      if (p.team === 1) sp *= this.diff.speed;
+      if (p.gk && p.dive > 0) sp *= 2.4;
+      const lm = Math.min(1, len);
+      const tvx = len > 0.01 ? (dx / len) * sp * lm : 0, tvy = len > 0.01 ? (dy / len) * sp * lm : 0;
+      const k = Math.min(1, dt * 6);
+      p.vx += (tvx - p.vx) * k; p.vy += (tvy - p.vy) * k;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.x = U.clamp(p.x, 0.3, C.W - 0.3); p.y = U.clamp(p.y, 0.3, C.H - 0.3);
+      if (p.gk) {
+        const g = this.ownGoalX(p.team), d = this.teams[p.team].dir;
+        const lo = Math.min(g, g + d * 5), hi = Math.max(g, g + d * 5);
+        p.x = U.clamp(p.x, lo + 0.25, hi - 0.25) ;
+      }
+      const spd = Math.hypot(p.vx, p.vy);
+      if (spd > 0.4) { const a = Math.atan2(p.vy, p.vx); p.face += U.angDiff(a, p.face) * Math.min(1, dt * 9); }
+      else if (!this.ball.owner || this.ball.owner !== p) { const a = U.angle(p, this.ball); p.face += U.angDiff(a, p.face) * Math.min(1, dt * 5); }
+      if (spd > 1.5 && this.rng() < dt * spd * 1.3) this.ev('wake', p.x, p.y, spd);
+    }
+    separate() {
+      const ps = this.players.filter(p => p.inPool), m = C.PR * 2;
+      for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) {
+        const a = ps[i], b = ps[j], dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
+        if (d < m && d > 0.001) { const push = (m - d) * 0.5, nx = dx / d, ny = dy / d; a.x -= nx * push; a.y -= ny * push; b.x += nx * push; b.y += ny * push; }
+      }
+    }
+
+    // ---------- Mensch ----------
+    handleHumanSystem() {
+      const i = this.input, b = this.ball;
+      if (i.timeout && this.phase === 'play' && b.owner && b.owner.team === 0 && this.teams[0].timeouts > 0) {
+        this.teams[0].timeouts--; this.phase = 'timeout'; this.pt = 3.5; this.rs = { type: 'free', team: 0, taker: b.owner, t: 0 };
+        this.pool(0).forEach(p => p.st = Math.min(1, p.st + 0.5)); this.shotClock = Math.max(this.shotClock, C.SHOT_CLOCK_SHORT);
+        this.say('Auszeit ' + this.teams[0].def.name + ' (' + (C.TIMEOUTS - this.teams[0].timeouts) + '/' + C.TIMEOUTS + ')', 3.2); WP.Audio && WP.Audio.whistle(2);
+      }
+      if (i.sub && this.phase === 'restart' && this.sel && !this.sel.gk) this.substitute(this.sel);
+    }
+    updateHuman(dt) {
+      if (this.o.auto) { this.sel = null; return; }
+      const i = this.input, b = this.ball;
+      if (this.sel && (!this.sel.inPool || this.sel.team !== 0)) this.sel = null;
+      if (b.owner && b.owner.team === 0 && !b.owner.gk) this.sel = b.owner;
+      else if (!this.sel || i.switchP || this.phase === 'restart' && this.rs && this.rs.team === 0) {
+        if (this.phase === 'restart' && this.rs && this.rs.team === 0 && !this.rs.taker.gk) this.sel = this.rs.taker;
+        else this.sel = this.nearest(0, b, true) || this.sel;
+      } else if (!b.owner || b.owner.team === 1) {
+        const n = this.nearest(0, b, true);
+        if (n && U.dist(n, b) < U.dist(this.sel, b) - 1.8) this.sel = n;
+      }
+      const p = this.sel; if (!p) return;
+      this.humanMove = true;
+      const aim = { x: i.aimX, y: i.aimY };
+      if (this.phase === 'restart' && this.rs.type === 'penalty' && this.rs.taker !== p) return;
+      this.moveP(p, dt, i.mx, i.my, i.sprint);
+      if (i.mx === 0 && i.my === 0 && b.owner === p) p.face += U.angDiff(U.angle(p, aim), p.face) * Math.min(1, dt * 8);
+      if (b.owner === p) {
+        if (i.shootHeld) this.charge = Math.min(1, this.charge + dt * 1.5); else if (!i.shootRelease) this.charge = 0;
+        if (i.shootRelease) {
+          if (this.freeNoShot && Math.abs(p.x - this.atkGoalX(0)) < C.L6 && this.phase !== 'restart') { this.say('Innerhalb 6 m – erst passen!', 1.4); }
+          else if (this.freeNoShot && Math.abs(p.x - this.atkGoalX(0)) < C.L6) { this.say('Innerhalb 6 m – erst passen!', 1.4); }
+          else this.humanShoot(p, aim, 0.55 + 0.45 * this.charge);
+          this.charge = 0;
+        } else if (i.pass) {
+          const t = this.bestPassTarget(p, aim);
+          if (t) this.pass(p, t);
+        } else if (i.fake) { p.fakeT = 0.5; this.teams[1].players.forEach(o => { if (o.inPool && U.dist(o, p) < 2.6) o.bite = 1.2; }); }
+      } else if (i.tackle && p.cd <= 0) {
+        p.cd = 0.8; p.press = 0.4;
+        const c = b.owner && b.owner.team === 1 ? b.owner : null;
+        if (c && U.dist(c, p) < 1.5) this.tackle(p, c);
+      }
+    }
+    nearest(t, pt, noGk) {
+      let best = null, bd = 1e9;
+      for (const p of this.teams[t].players) { if (!p.inPool || (noGk && p.gk)) continue; const d = U.dist(p, pt); if (d < bd) { bd = d; best = p; } }
+      return best;
+    }
+    bestPassTarget(p, aim) {
+      const ang = U.angle(p, aim); let best = null, bs = 1e9;
+      for (const q of this.teams[p.team].players) {
+        if (!q.inPool || q === p) continue;
+        const d = U.dist(p, q); if (d < 1.5) continue;
+        const s = Math.abs(U.angDiff(U.angle(p, q), ang)) + d * 0.01;
+        if (s < bs) { bs = s; best = q; }
+      }
+      return bs < 0.9 ? best : null;
+    }
+    humanShoot(p, aim, power) {
+      const gx = this.atkGoalX(0), dir = this.teams[0].dir;
+      let tx = aim.x, ty = aim.y;
+      const nearGoal = Math.abs(aim.x - gx) < 2.5 && Math.abs(aim.y - C.H / 2) < 2.6;
+      if (!nearGoal && (aim.x - p.x) * dir > 0.5) { const t = (gx - p.x) / (aim.x - p.x); ty = p.y + (aim.y - p.y) * t; tx = gx; }
+      this.shoot(p, tx, ty, 0.35 + this.rng() * 0.45, power);
+    }
+  }
+
+  WP.Game = Game;
+})();
+
+</script>
+<script>
+// Ball-Physik, Schüsse, Pässe, Paraden, Tore, Fouls, Strafwurf
+(function () {
+  const WP = globalThis.WP, C = WP.C, U = WP.U, G = 9.8, P = WP.Game.prototype;
+  const A = () => WP.Audio;
+
+  P.setOwner = function (p) {
+    const b = this.ball;
+    if (b.owner === p) return;
+    const prev = this.poss;
+    b.owner = p; b.flight = null; b.vx = b.vy = b.vz = 0; b.z = 0; b.pen = false;
+    b.lastTeam = p.team; b.lastPlayer = p; b.tried = {}; p.holdT = 0;
+    if (prev !== p.team) { this.poss = p.team; this.shotClock = C.SHOT_CLOCK; this.freeNoShot = false; }
+  };
+  P.endRestart = function () {
+    if (this.phase === 'restart') { this.phase = 'play'; this.rs = null; A() && A().whistle(1); this.ev('whistle'); }
+  };
+  P.pressure = function (p) {
+    let m = 9;
+    for (const o of this.pool(1 - p.team)) m = Math.min(m, U.dist(o, p));
+    return U.clamp(1 - (m - 0.6) / 2.4, 0, 1);
+  };
+  P.openness = function (p) {
+    let m = 9;
+    for (const o of this.pool(1 - p.team)) if (!o.gk) m = Math.min(m, U.dist(o, p));
+    return m;
+  };
+
+  // ---------- Schuss ----------
+  P.shoot = function (p, tx, ty, h, power) {
+    const b = this.ball, pen = (this.rs && this.rs.type === 'penalty') || this.phase === 'shootout';
+    this.endRestart();
+    const dist = Math.max(1, Math.hypot(tx - p.x, ty - p.y));
+    const skill = p.attr.shoot * (p.team === 1 ? this.diff.aim : 0.85);
+    const err = (1.18 - skill) * 0.95 * (0.5 + this.pressure(p)) + (power > 0.92 ? 0.15 : 0);
+    ty += (this.rng() - 0.5) * 2 * err * Math.min(1.6, dist / 5);
+    h = U.clamp(h + (this.rng() - 0.5) * err * 0.7, -0.1, 1.3);
+    const speed = 9 + 11 * power * p.attr.shoot, T = dist / speed;
+    const nx = (tx - p.x) / dist, ny = (ty - p.y) / dist, z0 = 0.5, zT = h * C.GOAL_H;
+    b.owner = null; b.flight = 'shot'; b.x = p.x + nx * 0.5; b.y = p.y + ny * 0.5; b.z = z0;
+    b.vx = nx * speed; b.vy = ny * speed; b.vz = (zT - z0 + 0.5 * G * T * T) / T;
+    b.shotTeam = p.team; b.shotT = 0; b.lastTeam = p.team; b.lastPlayer = p; b.noPick = 0.3; b.tried = {};
+    b.pen = pen; b.penSide = ty - C.H / 2 < -0.55 ? -1 : ty - C.H / 2 > 0.55 ? 1 : 0;
+    p.cd = 0.5; this.freeNoShot = false;
+    this.teams[p.team].stats.shots++;
+    if (pen) this.penaltyGk(p, b.penSide);
+    this.ev('shot', p.x, p.y, speed); A() && A().ball(speed);
+    if (this.so) this.so.state = this.phase === 'shootout' ? 'fly' : this.so.state;
+    if (this.so && this.phase === 'shootout') this.so.t = 0;
+  };
+  P.penaltyGk = function (p, side) {
+    const gk = this.gkOf(1 - p.team); if (!gk) return;
+    let choice;
+    if (gk.team === 0 && !this.o.auto) choice = this.diveSel || 0;
+    else {
+      const sk = gk.attr.gk * (this.diff.gk / 0.7) * 0.5;
+      choice = this.rng() < 0.3 * sk ? side : [-1, 0, 1][Math.floor(this.rng() * 3)];
+    }
+    gk.penChoice = choice; gk.penTarget = C.H / 2 + choice * 1.15; gk.penT = 1.6; gk.dive = 0.8;
+  };
+  // ---------- Pass ----------
+  P.pass = function (p, q, speed) {
+    const b = this.ball; this.endRestart();
+    let d = Math.max(0.5, U.dist(p, q)); speed = speed || 11;
+    let T = d / speed, tx = q.x + q.vx * T * 0.7, ty = q.y + q.vy * T * 0.7;
+    const e = (1.15 - p.attr.pass) * 0.7;
+    tx += (this.rng() - 0.5) * e; ty += (this.rng() - 0.5) * e;
+    d = Math.max(0.5, Math.hypot(tx - p.x, ty - p.y)); T = d / speed;
+    const nx = (tx - p.x) / d, ny = (ty - p.y) / d, z0 = 0.4;
+    b.owner = null; b.flight = 'pass'; b.x = p.x + nx * 0.5; b.y = p.y + ny * 0.5; b.z = z0;
+    b.vx = nx * speed; b.vy = ny * speed; b.vz = (0.5 * G * T * T - z0) / T;
+    b.lastTeam = p.team; b.lastPlayer = p; b.noPick = 0.25; b.tried = {}; b.pen = false;
+    p.cd = 0.3; this.freeNoShot = false; this.ev('pass', p.x, p.y); A() && A().ball(5);
+  };
+
+  // ---------- Ball-Update ----------
+  P.updateBall = function (dt) {
+    const b = this.ball;
+    if (b.owner) {
+      const o = b.owner;
+      if (!o.inPool) b.owner = null;
+      else { b.x = U.clamp(o.x + Math.cos(o.face) * 0.55, 0.15, C.W - 0.15); b.y = U.clamp(o.y + Math.sin(o.face) * 0.55, 0.15, C.H - 0.15); b.z = 0; return; }
+    }
+    if (this.phase === 'goal') { b.vx *= Math.pow(0.1, dt); b.vy *= Math.pow(0.1, dt); }
+    const px = b.x, py = b.y, pz = b.z;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.z > 0 || b.vz > 0) {
+      b.vz -= G * dt; b.z += b.vz * dt;
+      if (b.z <= 0) {
+        b.z = 0;
+        if (b.vz < -2.5) { this.ev('splash', b.x, b.y, -b.vz); A() && A().splash(-b.vz); b.vz = -b.vz * 0.3; b.vx *= 0.75; b.vy *= 0.75; } else b.vz = 0;
+      }
+    }
+    if (b.z === 0) { const k = Math.exp(-1.7 * dt); b.vx *= k; b.vy *= k; if (Math.hypot(b.vx, b.vy) < 1.5 && b.flight) b.flight = null; }
+    if (b.noPick > 0) b.noPick -= dt;
+    b.shotT += dt;
+    if (b.flight === 'shot' && b.shotT > 2.5) b.flight = null;
+    // Tor / Torlinie
+    const W = C.W, H = C.H;
+    const side = b.x < 0 && px >= 0 ? 0 : b.x > W && px <= W ? W : -1;
+    if (side !== -1) {
+      const lx = side, t = (lx - px) / (b.x - px || 1e-6);
+      const yc = py + (b.y - py) * t, zc = pz + (b.z - pz) * t, off = Math.abs(yc - H / 2), hw = C.GOAL_W / 2;
+      if (off <= hw && zc <= C.GOAL_H && zc >= -0.3) { this.scoreGoal(lx, yc); }
+      else if ((Math.abs(off - hw) < 0.12 && zc < C.GOAL_H + 0.1) || (off < hw && zc > C.GOAL_H && zc < C.GOAL_H + 0.14)) {
+        b.x = lx + (lx === 0 ? 0.3 : -0.3); b.vx = -b.vx * 0.45; b.vy += (this.rng() - 0.5) * 3; b.vz = Math.abs(b.vz) * 0.3; b.flight = null;
+        b.noPick = 0.15; this.ev('post', lx, yc); A() && A().post(); b.lastTeam = b.lastTeam;
+      } else this.outOverLine(lx, yc);
+      return;
+    }
+    if (b.y < 0.12) { b.y = 0.12; b.vy = Math.abs(b.vy) * 0.6; }
+    if (b.y > H - 0.12) { b.y = H - 0.12; b.vy = -Math.abs(b.vy) * 0.6; }
+    if (this.phase === 'goal') return;
+    this.ballContacts(dt);
+  };
+
+  P.ballContacts = function (dt) {
+    const b = this.ball;
+    if (b.owner || b.z > 1.9) return;
+    if (b.flight === 'shot' && b.shotT < 2.4) {
+      const dt_ = 1 - b.shotTeam, gk = this.gkOf(dt_);
+      if (gk && !b.tried[gk.id] && U.dist(gk, b) < 1.15 + (gk.dive > 0 ? 0.6 : 0)) { b.tried[gk.id] = 1; this.gkSave(gk); return; }
+      for (const p of this.pool(dt_)) {
+        if (p.gk || b.tried[p.id] || b.z > 1.15 || U.dist(p, b) > 0.58) continue;
+        b.tried[p.id] = 1;
+        if (this.rng() < 0.26 * p.attr.def) {
+          b.vx = -b.vx * 0.3 + (this.rng() - 0.5) * 4; b.vy = (this.rng() - 0.5) * 5; b.vz = 1.5; b.flight = null;
+          b.lastTeam = p.team; b.lastPlayer = p; b.noPick = 0.2; this.ev('block', p.x, p.y); A() && A().save(); return;
+        }
+      }
+      return;
+    }
+    const sp = Math.hypot(b.vx, b.vy);
+    let cand = this.players.filter(p => p.inPool && U.dist(p, b) < (p.gk ? 0.95 : 0.62) && !(p === b.lastPlayer && b.noPick > 0));
+    cand.sort((a, c) => U.dist(a, b) - U.dist(c, b));
+    for (const p of cand) {
+      if (p.gk && b.z > 1.7) continue; if (!p.gk && b.z > 1.15) continue;
+      if (this.phase === 'goal') return;
+      if (p.team !== b.lastTeam && b.flight === 'pass') {
+        if (b.tried[p.id]) continue; b.tried[p.id] = 1;
+        if (this.rng() > 0.5 * p.attr.def * (p.team === 1 ? this.diff.steal : 0.75)) continue;
+        this.ev('steal', p.x, p.y);
+      }
+      this.setOwner(p); if (sp > 4) A() && A().ball(sp); return;
+    }
+  };
+
+  P.gkSave = function (gk) {
+    const b = this.ball, sp = Math.hypot(b.vx, b.vy), skill = gk.attr.gk * (gk.team === 1 ? this.diff.gk / 0.7 : 0.85);
+    let ps;
+    if (b.pen) ps = (gk.penChoice === b.penSide ? 0.82 : 0.07) * Math.min(1.1, skill);
+    else ps = U.clamp(0.4 * skill + 0.12 - (sp - 14) * 0.012 - (b.z > 0.7 ? 0.06 : 0), 0.12, 0.85);
+    gk.dive = 0.5;
+    if (this.rng() > ps) return; // Schuss geht durch
+    this.teams[gk.team].stats.saves++; this.ev('save', gk.x, gk.y); A() && A().save();
+    if (this.phase === 'shootout') { this.so.res = 'save'; this.setOwner(gk); return; }
+    if (this.rng() < 0.55) { this.setOwner(gk); this.say('Parade! ' + gk.name + ' (#' + gk.num + ')', 1.6); }
+    else if (this.rng() < 0.4) {
+      this.say('Abgelenkt – Eckball', 1.6);
+      const gx = this.ownGoalX(gk.team);
+      this.signal(1 - gk.team, gx, b.y);
+      this.startRestart('corner', 1 - gk.team, gx + (gx === 0 ? 2 : -2), b.y < C.H / 2 ? 0.7 : C.H - 0.7, C.SHOT_CLOCK_SHORT);
+    } else {
+      b.vx = (gk.team === 0 ? 1 : -1) * (this.teams[gk.team].dir > 0 ? 1 : -1) * 0 + (this.ownGoalX(gk.team) === 0 ? 1 : -1) * (2 + this.rng() * 3);
+      b.vy = (this.rng() - 0.5) * 6; b.vz = 2; b.flight = null; b.lastTeam = gk.team; b.lastPlayer = gk; b.noPick = 0.3;
+    }
+  };
+
+  P.scoreGoal = function (lx, yc) {
+    const b = this.ball, t = this.atkGoalX(0) === lx ? 0 : 1, T = this.teams[t], who = b.lastPlayer;
+    if (this.phase === 'shootout') {
+      if (this.so.res !== 'goal') { this.so.res = 'goal'; this.ev('goal', lx, yc); A() && A().goal(); }
+      b.vx *= 0.1; b.vy *= 0.1; b.x = lx + (lx === 0 ? 0.4 : -0.4); b.vz = 0; b.z = 0; b.flight = null; return;
+    }
+    T.score++; this.lastGoalTeam = t; b.flight = null; b.x = lx + (lx === 0 ? 0.5 : -0.5); b.vx = b.vy = 0; b.z = 0;
+    let txt = 'TOR ' + T.def.short + '!';
+    if (who && who.team === t) { who.goals++; txt += ' ' + who.name + ' (#' + who.num + ')'; } else txt += ' (Eigentor)';
+    this.say(txt + '  ' + this.teams[0].score + ':' + this.teams[1].score, 3);
+    this.phase = 'goal'; this.pt = 3.2; this.rs = null; this.poss = -1; this.shotClock = C.SHOT_CLOCK;
+    this.goalJudges[lx === 0 ? 0 : 1].w = 3; this.ev('goal', lx, yc); A() && A().goal(); A() && A().whistle(2);
+  };
+  P.outOverLine = function (lx, yc) {
+    const b = this.ball, defT = this.ownGoalX(0) === lx ? 0 : 1;
+    if (this.phase === 'shootout') { if (!this.so.res) this.so.res = 'miss'; b.vx = b.vy = 0; b.x = U.clamp(b.x, 0.3, C.W - 0.3); return; }
+    if (b.lastTeam === defT) {
+      this.say('Eckball ' + this.teams[1 - defT].def.short, 1.8); this.signal(1 - defT, lx, yc);
+      this.startRestart('corner', 1 - defT, lx + (lx === 0 ? 2 : -2), yc < C.H / 2 ? 0.7 : C.H - 0.7, C.SHOT_CLOCK_SHORT);
+    } else {
+      this.say('Torabwurf ' + this.teams[defT].def.short, 1.6); this.signal(defT, lx, yc);
+      const gk = this.gkOf(defT), d = this.teams[defT].dir;
+      this.startRestart('throw', defT, lx + d * 0.8, C.H / 2, C.SHOT_CLOCK, gk);
+    }
+  };
+
+  // ---------- Neustart ----------
+  P.startRestart = function (type, team, x, y, clock, taker) {
+    const b = this.ball, d = this.teams[team].dir;
+    x = U.clamp(x, 0.6, C.W - 0.6); y = U.clamp(y, 0.6, C.H - 0.6);
+    taker = taker || this.nearest(team, { x, y }, true) || this.pool(team)[0];
+    taker.x = x; taker.y = y; taker.vx = taker.vy = 0; taker.face = d > 0 ? 0 : Math.PI;
+    this.phase = 'restart'; this.rs = { type, team, taker, t: 0 };
+    b.owner = null; this.setOwner(taker); this.poss = team;
+    this.shotClock = clock || C.SHOT_CLOCK; this.freeNoShot = type === 'free';
+    for (const o of this.pool(1 - team)) {
+      const dx = o.x - x, dy = o.y - y, dd = Math.hypot(dx, dy);
+      if (dd < 2.2) { const nx = dd > 0.01 ? dx / dd : -d, ny = dd > 0.01 ? dy / dd : 0; o.x = U.clamp(x + nx * 2.3, 0.4, C.W - 0.4); o.y = U.clamp(y + ny * 2.3, 0.4, C.H - 0.4); }
+    }
+  };
+  P.startPenalty = function (team, x, y) {
+    const d = this.teams[team].dir, gx = this.atkGoalX(team), taker = this.field(team).slice().sort((a, c) => c.attr.shoot - a.attr.shoot)[0];
+    const dg = this.gkOf(1 - team);
+    taker.x = gx - d * C.L5; taker.y = C.H / 2; taker.vx = taker.vy = 0; taker.face = d > 0 ? 0 : Math.PI;
+    if (dg) { dg.x = gx - d * 0.5; dg.y = C.H / 2; dg.vx = dg.vy = 0; dg.penTarget = undefined; }
+    let i = 0;
+    for (const p of this.pool(0).concat(this.pool(1))) {
+      if (p === taker || p === dg || p.gk) continue;
+      p.x = gx - d * (7.5 + (i % 3) * 1.2); p.y = 3 + (i++) * 1.1; p.vx = p.vy = 0;
+    }
+    const og = this.gkOf(team); if (og) { og.x = this.ownGoalX(team) + d * 0.6; og.y = C.H / 2; }
+    this.phase = 'restart'; this.rs = { type: 'penalty', team, taker, t: 0 };
+    this.ball.owner = null; this.setOwner(taker); this.poss = team; this.shotClock = C.SHOT_CLOCK; this.freeNoShot = false;
+    this.teams[team].stats.pens++; this.diveSel = 0;
+    this.say('STRAFWURF (5 m) ' + this.teams[team].def.short, 2.6);
+  };
+
+  // ---------- Fouls ----------
+  P.tackle = function (d, c) {
+    const s = 0.3 * d.attr.def * (d.team === 1 ? this.diff.steal : 0.8) / c.attr.str * (c.fakeT > 0 ? 0.55 : 1);
+    const f = 0.085 * (d.team === 1 ? this.diff.foul : 1) * (d.press > 0 ? 1.3 : 1);
+    const r = this.rng();
+    if (r < s) { this.setOwner(d); this.ev('steal', d.x, d.y); A() && A().splash(3); this.say('Ballgewinn ' + d.name, 1.0); return 'steal'; }
+    if (r < s + f) { this.foulBy(d, c); return 'foul'; }
+    return 'none';
+  };
+  P.foulBy = function (d, c) {
+    const u = this.rng(), nearGoal = Math.abs(c.x - this.ownGoalX(d.team)) < C.L5 && this.ball.owner === c;
+    d.fouls++; this.teams[d.team].stats.fouls++;
+    const kind = nearGoal && u < 0.5 ? 'pen' : u > 0.985 ? 'brutal' : u < 0.4 ? 'excl' : 'ord';
+    const ft = this.teams[d.team], nm = d.name + ' (#' + d.num + ')';
+    this.signal(c.team, c.x, c.y);
+    if (kind === 'ord' || kind === 'excl' || kind === 'pen') {
+      if (kind === 'excl' || (kind === 'pen' && u < 0.2)) this.exclude(d, C.EXCL_S, nm + ' – Hinausstellung (' + d.fouls + '. Fehler)');
+      else this.say('Foul ' + nm, 1.5);
+    }
+    if (kind === 'brutal') { d.fouls = 9; this.exclude(d, C.BRUTAL_S, 'BRUTALITÄT! ' + nm + ' – Rote Karte'); }
+    if (d.fouls >= C.MAX_FOULS && d.inPool === false && !d.perm) { d.perm = true; this.say(nm + ' – 3. Fehler, ausgeschlossen', 2.2); }
+    if (kind === 'pen' || kind === 'brutal') { if (c.team === 0 || true) this.startPenalty(c.team); return; }
+    const gxA = this.atkGoalX(c.team), nearSix = Math.abs(c.x - gxA) < C.L2 ? 0 : 0;
+    this.startRestart('free', c.team, c.x, c.y, kind === 'excl' ? C.SHOT_CLOCK_SHORT : C.SHOT_CLOCK, this.nearest(c.team, c, true));
+  };
+  P.exclude = function (p, secs, text) {
+    p.inPool = false; p.excl = secs; if (secs >= C.BRUTAL_S) p.perm = true; this.teams[p.team].stats.excl++;
+    this.ev('excl', p.x, p.y); this.say(text, 2.6); A() && A().whistle(2);
+    if (this.ball.owner === p) this.ball.owner = null;
+    if (p === this.sel) this.sel = null;
+  };
+  P.returnPlayer = function (p) {
+    const T = this.teams[p.team], d = T.dir; p.excl = 0;
+    let q = p;
+    if (p.perm || p.fouls >= C.MAX_FOULS) {
+      q = T.players.find(x => !x.inPool && x !== p && !x.perm && x.excl <= 0 && x.fouls < C.MAX_FOULS && x.gk === p.gk && x.bench) || T.players.find(x => !x.inPool && x !== p && !x.perm && x.excl <= 0 && x.fouls < C.MAX_FOULS && !x.gk && x.bench);
+      if (!q) return;
+      this.say('Einwechslung #' + q.num + ' ' + q.name, 1.6);
+    }
+    q.inPool = true; q.bench = false; p !== q && (p.bench = false);
+    q.x = this.ownGoalX(p.team) + d * 2.2; q.y = 0.8; q.vx = q.vy = 0;
+  };
+  P.substitute = function (p) {
+    const T = this.teams[p.team], q = T.players.find(x => !x.inPool && !x.gk && x.bench && x.excl <= 0 && !x.perm);
+    if (!q) return;
+    q.inPool = true; q.x = p.x; q.y = p.y; q.vx = q.vy = 0; q.face = p.face; q.bench = false;
+    p.inPool = false; p.bench = true; if (this.ball.owner === p) this.setOwner(q);
+    this.sel = q; this.say('Wechsel: #' + q.num + ' für #' + p.num, 1.4);
+  };
+
+  // ---------- Regelkontrollen ----------
+  P.rulesCheck = function (dt) {
+    const b = this.ball;
+    if (this.poss < 0 || !b.owner) { this.players.forEach(p => p.twoM = 0); return; }
+    for (const p of this.pool(this.poss)) {
+      if (p.gk || p === b.owner) { p.twoM = 0; continue; }
+      const inTwo = Math.abs(p.x - this.atkGoalX(p.team)) < C.L2 - 0.05;
+      p.twoM = inTwo ? p.twoM + dt : 0;
+      if (p.twoM > 1.6) {
+        p.twoM = 0; this.say('Abseits – 2-m-Regel (#' + p.num + ')', 1.8); this.signal(1 - p.team, p.x, p.y);
+        const d = this.teams[1 - p.team].dir, gx = this.ownGoalX(1 - p.team);
+        this.startRestart('free', 1 - p.team, gx + d * 4, C.H / 2 + (p.y - C.H / 2) * 0.5, C.SHOT_CLOCK);
+        return;
+      }
+    }
+  };
+})();
+
+</script>
+<script>
+// Spielfluss: Schwimmduell, Viertelende, Penaltyschießen
+(function () {
+  const WP = globalThis.WP, C = WP.C, U = WP.U, P = WP.Game.prototype;
+  const A = () => WP.Audio;
+
+  P.swimStep = function (dt) {
+    this.pt -= dt;
+    if (this.pt > 0) return;
+    if (this.pt + dt > 0) { A() && A().whistle(1); this.ev('whistle'); }
+    this.updateHuman(dt); this.aiAll(dt);
+    for (const p of this.players) { p.cd -= dt; p.dive -= dt; }
+    this.separate(); this.updateBall(dt);
+    if (this.ball.owner) this.phase = 'play';
+    else if (this.pt < -9) { const p = this.nearest(0, this.ball, true); this.setOwner(p); this.phase = 'play'; }
+  };
+
+  P.afterGoal = function () {
+    const t = this.lastGoalTeam, c = 1 - t;
+    this.teams[c].players.filter(p => !p.inPool && p.excl > 0 && !p.perm).forEach(p => this.returnPlayer(p));
+    for (const p of this.players) if (p.inPool) {
+      const d = this.teams[p.team].dir;
+      p.x = d > 0 ? Math.min(p.x, 13.5) : Math.max(p.x, 16.5); p.vx = p.vy = 0;
+    }
+    const d = this.teams[c].dir;
+    this.startRestart('free', c, 15 - d * 0.8, C.H / 2, C.SHOT_CLOCK);
+    this.freeNoShot = false;
+    this.say('Anwurf ' + this.teams[c].def.short, 1.6); this.ev('whistle'); A() && A().whistle(1);
+  };
+
+  P.shotClockOut = function () {
+    const b = this.ball, t = 1 - this.poss;
+    this.say('Angriffszeit abgelaufen – Ballwechsel', 2);
+    const x = U.clamp(b.x, 3, C.W - 3), y = b.y;
+    this.signal(t, x, y);
+    this.startRestart('free', t, x, y, C.SHOT_CLOCK);
+  };
+
+  P.restartTimeout = function () {
+    const r = this.rs; if (!r) return;
+    const lim = r.team === 1 ? (r.type === 'penalty' ? 1.8 : 1.3) : 9;
+    if (r.t > lim + 4 || (r.t > 1 && this.ball.owner !== r.taker)) return this.endRestart();
+    if (r.t > lim) this.aiAct(r.taker, true);
+  };
+
+  P.endQuarter = function () {
+    this.clock = 0; A() && A().horn(); this.ev('horn');
+    this.phase = 'break'; this.pt = 3; this.rs = null;
+    this.say(this.quarter + '. Viertel beendet  ' + this.teams[0].score + ':' + this.teams[1].score, 3);
+  };
+  P.afterBreak = function () {
+    if (this.quarter < C.QUARTERS) return this.startQuarter(this.quarter + 1);
+    if (this.teams[0].score !== this.teams[1].score) return this.finish();
+    this.startShootout();
+  };
+  P.finish = function (so) {
+    this.phase = 'over'; this.finished = true;
+    const a = this.teams[0].score, b = this.teams[1].score;
+    this.winner = so ? (so.goals[0] > so.goals[1] ? 0 : 1) : a > b ? 0 : a < b ? 1 : -1;
+    A() && A().horn();
+  };
+
+  // ---------- Penaltyschießen ----------
+  P.startShootout = function () {
+    this.so = { goals: [0, 0], shots: [0, 0], turn: 0, state: 'setup', t: 0, res: null, log: [[], []], shooter: null };
+    this.phase = 'shootout'; this.rs = null; this.poss = -1;
+    this.say('Penaltyschießen!', 3); A() && A().whistle(2);
+  };
+  P.soCheck = function () {
+    const s = this.so, g = s.goals, n = s.shots, rem = [Math.max(0, 5 - n[0]), Math.max(0, 5 - n[1])];
+    if (n[0] <= 5 || n[1] <= 5) {
+      if (n[0] <= 5 && n[1] <= 5) { if (g[0] > g[1] + rem[1] || g[1] > g[0] + rem[0]) return true; if (n[0] === 5 && n[1] === 5 && g[0] !== g[1]) return true; return false; }
+    }
+    return n[0] === n[1] && n[0] >= 5 && g[0] !== g[1];
+  };
+  P.updateShootout = function (dt) {
+    const s = this.so, i = this.input, b = this.ball; s.t += dt;
+    if (this.message.t > 0) this.message.t -= 0;
+    if (s.state === 'setup') {
+      const t = s.turn, d = 1 - t;
+      this.teams[t].dir = 1; this.teams[d].dir = -1;
+      const list = this.field(t), sh = list[s.shots[t] % list.length], gk = this.gkOf(d), og = this.gkOf(t);
+      let k = 0;
+      for (const p of this.players) if (p.inPool) { p.vx = p.vy = 0; if (p !== sh && p !== gk) { p.x = 8 + (p.team * 1.5); p.y = 3 + (k++) * 1.1; p.face = 0; } }
+      sh.x = C.W - C.L5; sh.y = C.H / 2; sh.face = 0;
+      gk.x = C.W - 0.6; gk.y = C.H / 2; gk.face = Math.PI; gk.penTarget = undefined; gk.penChoice = undefined;
+      if (og) { og.x = 1; og.y = C.H / 2; }
+      s.shooter = sh; this.sel = t === 0 ? sh : null; this.ball.owner = null; this.setOwner(sh); this.poss = t;
+      s.state = 'aim'; s.t = 0; s.res = null; this.charge = 0; this.diveSel = 0;
+      this.say(this.teams[t].def.short + ': #' + sh.num + ' ' + sh.name, 1.8);
+    } else if (s.state === 'aim') {
+      const t = s.turn, sh = s.shooter;
+      if (i.shootHeld) this.charge = Math.min(1, this.charge + dt * 1.5);
+      this.ball.x = sh.x + 0.55; this.ball.y = sh.y;
+      if (t === 0 && !this.o.auto) {
+        if (i.shootRelease) { this.shoot(sh, C.W, U.clamp(i.aimY, C.H / 2 - 2.3, C.H / 2 + 2.3), 0.15 + 0.7 * this.charge, 0.9); this.charge = 0; }
+      } else if (s.t > 1.4) {
+        this.shoot(sh, C.W, C.H / 2 + (this.rng() < 0.5 ? -1 : 1) * (0.5 + this.rng() * 0.9), 0.2 + this.rng() * 0.6, 0.9);
+      }
+    } else if (s.state === 'fly') {
+      for (const p of this.players) if (p.gk && p.penTarget !== undefined) { p.y += U.clamp(p.penTarget - p.y, -6 * dt, 6 * dt); p.dive -= dt; }
+      this.updateBall(dt);
+      if (s.res || s.t > 3.2) {
+        const res = s.res || 'miss', t = s.turn;
+        s.shots[t]++; if (res === 'goal') s.goals[t]++; s.log[t].push(res === 'goal');
+        this.say(res === 'goal' ? 'TOR!' : res === 'save' ? 'GEHALTEN!' : 'Daneben!', 1.6);
+        if (res === 'goal') A() && A().cheer(0.15);
+        s.state = 'result'; s.t = 0;
+      }
+    } else if (s.state === 'result') {
+      this.updateBall(dt);
+      if (s.t > 1.8) {
+        if (this.soCheck()) { this.finish(s); return; }
+        s.turn = 1 - s.turn; s.state = 'setup';
+      }
+    }
+  };
+})();
+
+</script>
+<script>
+// KI: Formationen, Manndeckung, Ballführung, Torwart
+(function () {
+  const WP = globalThis.WP, C = WP.C, U = WP.U, P = WP.Game.prototype;
+
+  P.aiAll = function (dt) {
+    const b = this.ball, play = this.phase === 'play', swim = this.phase === 'swim', rest = this.phase === 'restart';
+    const live = play || swim;
+    const chasers = [null, null];
+    if (live && !b.owner && b.flight !== 'shot') {
+      for (let t = 0; t < 2; t++) {
+        let best = null, bd = 1e9;
+        for (const p of this.field(t)) { if (p === this.sel && !this.o.auto) continue; const d = U.dist(p, b); if (d < bd) { bd = d; best = p; } }
+        chasers[t] = best;
+      }
+    }
+    for (let t = 0; t < 2; t++) {
+      const T = this.teams[t], dir = T.dir, mine = this.pool(t), opp = this.pool(1 - t);
+      const att = b.owner ? b.owner.team === t : this.poss === t;
+      const carrier = b.owner && b.owner.team !== t ? b.owner : null;
+      const marks = new Map();
+      if (!att || carrier) {
+        const free = opp.filter(o => !o.gk);
+        const defs = this.field(t).filter(p => p !== b.owner).sort((a, c) => Math.abs(a.x - this.ownGoalX(t)) - Math.abs(c.x - this.ownGoalX(t)));
+        for (const d of defs) {
+          let best = null, bd = 1e9;
+          for (const a of free) { const dd = U.dist(d, a) + Math.abs(a.x - this.ownGoalX(t)) * 0.15; if (dd < bd) { bd = dd; best = a; } }
+          if (best) { marks.set(d, best); free.splice(free.indexOf(best), 1); }
+        }
+      }
+      for (const p of mine) {
+        if (p === this.sel && !this.o.auto && t === 0) continue;
+        if (p.gk) { this.aiGk(p, dt); continue; }
+        if (b.owner === p) { if (play) this.aiCarrier(p, dt); continue; }
+        if (chasers[t] === p) { this.moveP(p, dt, b.x - p.x, b.y - p.y, true); continue; }
+        if (att) {
+          const R = WP.ROLES[p.role], gx = this.atkGoalX(t), ballD = Math.abs(b.x - gx);
+          const depth = R.depth + Math.max(0, ballD - 12) * 0.5;
+          const tx = gx - dir * depth + Math.sin(this.time * 0.7 + p.id) * 0.6;
+          const ty = C.H / 2 + R.side * 7.5 + Math.cos(this.time * 0.6 + p.id * 1.7) * 0.9;
+          this.moveP(p, dt, tx - p.x, ty - p.y, Math.hypot(tx - p.x, ty - p.y) > 4);
+        } else {
+          const m = marks.get(p); let tx, ty;
+          if (carrier && m && m === carrier || (carrier && this.isPresser(p, carrier, t))) {
+            tx = carrier.x; ty = carrier.y;
+            const d = U.dist(p, carrier);
+            if (play && d < 1.25 && p.cd <= 0) { p.cd = 0.9 + this.rng() * 0.5; p.press = 0.4; this.tackle(p, carrier); }
+            this.moveP(p, dt, tx - p.x, ty - p.y, true); continue;
+          }
+          if (m) {
+            const gx = this.ownGoalX(t), vx = gx - m.x, vy = C.H / 2 - m.y, l = Math.hypot(vx, vy) || 1;
+            tx = m.x + vx / l * 0.95; ty = m.y + vy / l * 0.95;
+          } else { tx = this.ownGoalX(t) + dir * 5; ty = C.H / 2; }
+          this.moveP(p, dt, tx - p.x, ty - p.y, Math.hypot(tx - p.x, ty - p.y) > 3);
+        }
+      }
+    }
+  };
+  P.isPresser = function (p, carrier, t) {
+    let best = null, bd = 1e9;
+    for (const q of this.field(t)) { if (q === this.sel && !this.o.auto && t === 0) continue; const d = U.dist(q, carrier); if (d < bd) { bd = d; best = q; } }
+    return best === p;
+  };
+
+  P.aiGk = function (p, dt) {
+    const b = this.ball, t = p.team, d = this.teams[t].dir, gx = this.ownGoalX(t);
+    if (p.penTarget !== undefined) { p.y += U.clamp(p.penTarget - p.y, -6 * dt, 6 * dt); p.penT -= dt; if (p.penT <= 0) p.penTarget = undefined; return; }
+    if (b.owner === p) { if (this.phase === 'play') this.aiCarrier(p, dt); return; }
+    let tx = gx + d * 0.9, ty = U.clamp(C.H / 2 + (b.y - C.H / 2) * 0.28, C.H / 2 - 1.3, C.H / 2 + 1.3);
+    if (b.flight === 'shot' && b.shotTeam !== t) ty = U.clamp(b.y, C.H / 2 - 1.6, C.H / 2 + 1.6);
+    else if (!b.owner && b.flight !== 'shot' && Math.abs(b.x - gx) < 4.2) {
+      const o = this.pool(1 - t).some(q => !q.gk && U.dist(q, b) < U.dist(p, b) - 0.3);
+      if (!o) { tx = b.x; ty = b.y; }
+    }
+    this.moveP(p, dt, tx - p.x, ty - p.y, false);
+  };
+
+  P.bestTeammate = function (p) {
+    let best = null, bs = -1e9;
+    const gx = this.atkGoalX(p.team);
+    for (const q of this.pool(p.team)) {
+      if (q === p || (q.gk && !p.gk && Math.abs(p.x - this.ownGoalX(p.team)) > 6)) continue;
+      let blocked = false;
+      for (const o of this.pool(1 - p.team)) if (!o.gk && U.distToSegment(o.x, o.y, p.x, p.y, q.x, q.y) < 0.65) { blocked = true; break; }
+      if (blocked) continue;
+      const d = U.dist(p, q); if (d < 1.5) continue;
+      let s = Math.min(this.openness(q), 4) * 0.7 - Math.abs(q.x - gx) * 0.18 - d * 0.04 + (q.role === 'CF' && Math.abs(q.x - gx) < 4 ? 1.5 : 0) - (q.gk ? 4 : 0);
+      s += this.rng() * 0.8;
+      if (s > bs) { bs = s; best = q; }
+    }
+    return best;
+  };
+
+  P.aiAct = function (p, forced) {
+    const b = this.ball, t = p.team, gx = this.atkGoalX(t), dg = Math.abs(p.x - gx);
+    if (this.rs && this.rs.type === 'penalty') { return this.shoot(p, gx, C.H / 2 + (this.rng() < 0.5 ? -1 : 1) * (0.5 + this.rng() * 0.9), 0.2 + this.rng() * 0.6, 0.95); }
+    const can = !(this.freeNoShot && dg < C.L6);
+    if (!p.gk && can && dg < 10 && (forced === 'shoot')) {
+      return this.shoot(p, gx, C.H / 2 + (this.rng() < 0.5 ? -1 : 1) * (0.7 + this.rng() * 0.7), 0.15 + this.rng() * 0.7, 0.7 + 0.3 * this.rng());
+    }
+    const q = this.bestTeammate(p);
+    if (q) this.pass(p, q); else if (forced === true && !can) { const f = this.pool(t).filter(x => x !== p).sort((a, c) => U.dist(a, p) - U.dist(c, p))[0]; if (f) this.pass(p, f); else this.endRestart(); } else if (forced === true && can) this.shoot(p, gx, C.H / 2 + (this.rng() - 0.5) * 2.4, 0.4, 0.8);
+  };
+
+  P.aiCarrier = function (p, dt) {
+    const t = p.team, dir = this.teams[t].dir, gx = this.atkGoalX(t), dg = Math.abs(p.x - gx);
+    p.holdT += dt;
+    const k = t === 1 ? this.diff.react : 0.8;
+    if (p.gk) { if (p.holdT > 0.9) this.aiAct(p); return; }
+    const open = this.openness(p), can = !(this.freeNoShot && dg < C.L6), forced = this.shotClock < 4.5;
+    const rate = (open > 1.3 ? 1 : 0.35) * (dg < 7 ? 1 : 0.4) * (p.role === 'CF' ? 1.4 : 1);
+    if (can && dg < 10.5 && p.holdT > 0.5 && (forced || (dg < 9 && this.rng() < dt * 1.6 * rate * k))) return this.aiAct(p, 'shoot');
+    if (p.holdT > 0.9 + (1.2 - k) * 0.8 && (this.pressure(p) > 0.5 || p.holdT > 2.2 || dg > 9)) {
+      const q = this.bestTeammate(p); if (q) return this.pass(p, q);
+    }
+    if (this.freeNoShot && dg < C.L6 && p.holdT > 0.8) { const q = this.bestTeammate(p); if (q) return this.pass(p, q); }
+    const R = WP.ROLES[p.role], tx = gx - dir * (p.role === 'CF' ? 2.6 : Math.max(R.depth * 0.85, 6.2)), ty = C.H / 2 + R.side * 5;
+    this.moveP(p, dt, tx - p.x, ty - p.y, dg > 11);
+  };
+})();
+
+</script>
+<script>
+// Zeichnen: Becken, Tore, Spieler mit Kappen, Schiedsrichter, HUD
+(function () {
+  const WP = globalThis.WP, C = WP.C, U = WP.U;
+  const SKIN = ['#e9bd9a', '#cf9873', '#f2cfb0', '#b07a55', '#dba984'];
+
+  class Renderer {
+    constructor(canvas) {
+      this.cv = canvas; this.ctx = canvas.getContext('2d'); this.ripples = []; this.shake = 0; this.flash = 0; this.resize();
+    }
+    resize() {
+      const dpr = Math.min(2, window.devicePixelRatio || 1), w = this.cv.clientWidth, h = this.cv.clientHeight;
+      this.cv.width = w * dpr; this.cv.height = h * dpr; this.dpr = dpr; this.cw = w; this.ch = h;
+      this.s = Math.min((w - 30) / (C.W + 4), (h - 110) / (C.H + 5));
+      this.ox = (w - C.W * this.s) / 2; this.oy = (h - C.H * this.s) / 2 + 22;
+    }
+    X(x) { return this.ox + x * this.s; } Y(y) { return this.oy + y * this.s; }
+    toWorld(px, py) { return { x: (px - this.ox) / this.s, y: (py - this.oy) / this.s }; }
+
+    eat(g) {
+      for (const e of g.events) {
+        if (e.type === 'wake' && this.ripples.length < 160) this.ripples.push({ x: e.x, y: e.y, r: 0.2, a: 0.35, g: 1.5 });
+        else if (e.type === 'splash') this.ripples.push({ x: e.x, y: e.y, r: 0.2, a: 0.7, g: 3 });
+        else if (e.type === 'goal') { this.flash = 1; this.shake = 0.5; }
+        else if (e.type === 'post' || e.type === 'save') this.shake = 0.25;
+      }
+      g.events.length = 0;
+    }
+
+    draw(g, dt, ui) {
+      const c = this.ctx, s = this.s; this.eat(g);
+      c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      this.shake = Math.max(0, this.shake - dt * 1.6); this.flash = Math.max(0, this.flash - dt);
+      if (this.shake > 0) c.translate((Math.random() - 0.5) * this.shake * 6, (Math.random() - 0.5) * this.shake * 6);
+      this.deck(c, g);
+      this.pool(c, g, dt);
+      this.goals(c, g);
+      for (const r of g.refs) this.person(c, r.x, r.y < C.H / 2 ? -1.35 : C.H + 1.35, '#f4f4f4', '#222', 0, r.flag, r.y < C.H / 2 ? 1 : -1);
+      g.refs.forEach((r, i) => { r.y = i === 0 ? 0 : C.H; });
+      g.goalJudges.forEach((j, i) => this.person(c, i === 0 ? -0.9 : C.W + 0.9, -1.2, '#f4f4f4', '#222', 0, j.w > 0 ? '#fff' : null, 1));
+      const order = g.players.filter(p => p.inPool).sort((a, b) => a.y - b.y);
+      for (const p of order) this.player(c, g, p);
+      this.ball(c, g);
+      if (g.sel && g.sel.inPool) this.selMark(c, g, g.sel);
+      if (ui && ui.aim && g.sel && g.ball.owner === g.sel) this.aimLine(c, g, ui);
+      this.hud(c, g, ui);
+      if (this.flash > 0) { c.fillStyle = 'rgba(255,255,255,' + this.flash * 0.25 + ')'; c.fillRect(0, 0, this.cw, this.ch); }
+    }
+
+    deck(c, g) {
+      const w = this.cw, h = this.ch;
+      const gr = c.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, '#10243f'); gr.addColorStop(1, '#0a182b');
+      c.fillStyle = gr; c.fillRect(-10, -10, w + 20, h + 20);
+      // Tribüne (Zuschauer als Punkte)
+      const rows = 3; let n = 0;
+      for (let r = 0; r < rows; r++) for (let x = 6; x < w; x += 9) {
+        n++; const col = ['#c93a3a', '#e8e8e8', '#2f5bd0', '#e8c43a', '#3aa55f'][(n * 7 + r * 3) % 5];
+        c.fillStyle = col; c.globalAlpha = 0.5; c.beginPath(); c.arc(x + (r % 2) * 4, 8 + r * 9, 3, 0, 6.3); c.fill();
+        c.beginPath(); c.arc(x + (r % 2) * 4, h - 8 - r * 9, 3, 0, 6.3); c.fill();
+      }
+      c.globalAlpha = 1;
+      // Beckenrand
+      const s = this.s; c.fillStyle = '#cdd6df';
+      c.fillRect(this.X(-1.9), this.Y(-1.9), (C.W + 3.8) * s, (C.H + 3.8) * s);
+      c.fillStyle = '#9fb0c2'; c.fillRect(this.X(-0.4), this.Y(-0.4), (C.W + 0.8) * s, (C.H + 0.8) * s);
+    }
+
+    pool(c, g, dt) {
+      const s = this.s, x0 = this.X(0), y0 = this.Y(0), w = C.W * s, h = C.H * s, t = g.time;
+      const gr = c.createLinearGradient(0, y0, 0, y0 + h); gr.addColorStop(0, '#1b5fb4'); gr.addColorStop(0.5, '#1a52a3'); gr.addColorStop(1, '#144a96');
+      c.fillStyle = gr; c.fillRect(x0, y0, w, h);
+      c.save(); c.beginPath(); c.rect(x0, y0, w, h); c.clip();
+      c.strokeStyle = 'rgba(255,255,255,0.06)'; c.lineWidth = 1;
+      for (let i = 0; i < 26; i++) {
+        const yy = y0 + (i / 26) * h; c.beginPath();
+        for (let x = 0; x <= w; x += 14) { const yv = yy + Math.sin(x * 0.04 + t * 1.3 + i) * 2.2; x ? c.lineTo(x0 + x, yv) : c.moveTo(x0, yv); }
+        c.stroke();
+      }
+      // Linien
+      const line = (xm, col, wd, dash) => {
+        c.strokeStyle = col; c.lineWidth = wd; c.setLineDash(dash || []);
+        for (const x of [xm, C.W - xm]) { if (xm === C.W / 2 && x !== xm) continue; c.beginPath(); c.moveTo(this.X(x), y0); c.lineTo(this.X(x), y0 + h); c.stroke(); }
+        c.setLineDash([]);
+      };
+      line(C.W / 2, 'rgba(255,255,255,0.9)', 3);
+      line(C.L2, '#e5383b', 3, [10, 6]); line(C.L5, '#f2cc1e', 3, [10, 6]); line(C.L6, '#37b24d', 3, [10, 6]);
+      c.strokeStyle = '#fff'; c.lineWidth = 3;
+      for (const x of [0, C.W]) { c.beginPath(); c.moveTo(this.X(x), y0); c.lineTo(this.X(x), y0 + h); c.stroke(); }
+      // 5-m-Strafwurfpunkte
+      c.fillStyle = '#fff';
+      for (const x of [C.L5, C.W - C.L5]) { c.beginPath(); c.arc(this.X(x), this.Y(C.H / 2), 3, 0, 6.3); c.fill(); }
+      // Wellen
+      for (let i = this.ripples.length - 1; i >= 0; i--) {
+        const r = this.ripples[i]; r.r += dt * r.g; r.a -= dt * 0.55;
+        if (r.a <= 0) { this.ripples.splice(i, 1); continue; }
+        c.strokeStyle = 'rgba(255,255,255,' + r.a + ')'; c.lineWidth = 1.5; c.beginPath(); c.arc(this.X(r.x), this.Y(r.y), r.r * s * 0.5, 0, 6.3); c.stroke();
+      }
+      c.restore();
+      // Leinen mit Schwimmern (rot/weiß wie im Foto)
+      for (const yy of [0, C.H]) {
+        for (let x = 0.25; x < C.W; x += 0.5) {
+          c.fillStyle = Math.floor(x * 2) % 4 < 2 ? '#e5383b' : '#fff';
+          c.beginPath(); c.arc(this.X(x), this.Y(yy), s * 0.12, 0, 6.3); c.fill();
+        }
+      }
+    }
+
+    goals(c, g) {
+      const s = this.s, hw = C.GOAL_W / 2;
+      for (const side of [0, 1]) {
+        const x = side ? C.W : 0, dir = side ? 1 : -1, yA = this.Y(C.H / 2 - hw), yB = this.Y(C.H / 2 + hw), d = s * 1.1;
+        const nx0 = side ? this.X(x) : this.X(x) - d;
+        c.fillStyle = 'rgba(255,255,255,0.08)'; c.fillRect(nx0, yA, d, yB - yA);
+        c.strokeStyle = '#ff6a2b'; c.lineWidth = 1.2; c.beginPath();
+        for (let i = 0; i <= 10; i++) { const yy = yA + (yB - yA) * i / 10; c.moveTo(nx0, yy); c.lineTo(nx0 + d, yy); }
+        for (let i = 0; i <= 4; i++) { const xx = nx0 + d * i / 4; c.moveTo(xx, yA); c.lineTo(xx, yB); }
+        c.stroke();
+        c.strokeStyle = '#fff'; c.lineWidth = 4; c.beginPath(); c.moveTo(nx0, yA); c.lineTo(nx0 + d, yA); c.lineTo(nx0 + d, yB); c.lineTo(nx0, yB); c.stroke();
+        c.fillStyle = '#fff'; c.beginPath(); c.arc(this.X(x), yA, 5, 0, 6.3); c.arc(this.X(x), yB, 5, 0, 6.3); c.fill();
+      }
+    }
+
+    person(c, x, y, shirt, ink, face, flag, fdir) {
+      const s = this.s, X = this.X(x), Y = this.Y(y);
+      c.fillStyle = shirt; c.beginPath(); c.ellipse(X, Y, s * 0.5, s * 0.33, 0, 0, 6.3); c.fill();
+      c.fillStyle = '#d8a27d'; c.beginPath(); c.arc(X, Y, s * 0.22, 0, 6.3); c.fill();
+      if (flag) {
+        c.strokeStyle = '#444'; c.lineWidth = 2; c.beginPath(); c.moveTo(X + s * 0.3, Y); c.lineTo(X + s * 0.3, Y + fdir * s * 1.0); c.stroke();
+        c.fillStyle = flag; c.fillRect(X + s * 0.3, Y + fdir * s * 1.0 - (fdir > 0 ? 0 : s * 0.35), s * 0.5, s * 0.35); c.strokeStyle = '#222'; c.lineWidth = 1; c.strokeRect(X + s * 0.3, Y + fdir * s * 1.0 - (fdir > 0 ? 0 : s * 0.35), s * 0.5, s * 0.35);
+      }
+    }
+
+    player(c, g, p) {
+      const s = this.s, X = this.X(p.x), Y = this.Y(p.y), T = g.teams[p.team];
+      const cap = p.gk ? WP.GK_CAP : T.cap, skin = SKIN[p.id % SKIN.length];
+      const sp = Math.hypot(p.vx, p.vy), bob = Math.sin(g.time * 7 + p.id) * sp * 0.015 * s;
+      c.save(); c.translate(X, Y + bob); c.rotate(p.face);
+      c.fillStyle = 'rgba(255,255,255,0.18)'; c.beginPath(); c.ellipse(0, 0, s * 0.62, s * 0.5, 0, 0, 6.3); c.fill();
+      const reach = (g.ball.owner === p) ? 0.95 : 0.55 + (p.dive > 0 ? 0.55 : 0);
+      c.strokeStyle = skin; c.lineWidth = s * 0.17; c.lineCap = 'round';
+      const raise = p.gk && (p.dive > 0 || g.ball.flight === 'shot') ? 1.3 : 1;
+      c.beginPath(); c.moveTo(s * 0.08, -s * 0.34); c.lineTo(s * reach * 0.6 * raise, -s * (0.45 + 0.35 * (raise - 1) * 3)); c.moveTo(s * 0.08, s * 0.34); c.lineTo(s * reach * 0.6 * raise, s * (0.45 + 0.35 * (raise - 1) * 3)); c.stroke();
+      c.fillStyle = skin; c.beginPath(); c.ellipse(0, 0, s * 0.2, s * 0.43, 0, 0, 6.3); c.fill();
+      c.restore();
+      // Kappe
+      const r = s * 0.31;
+      c.fillStyle = cap.hex; c.beginPath(); c.arc(X, Y + bob, r, 0, 6.3); c.fill();
+      const ink = cap.ink;
+      if (!p.gk && T.style === 'stripe') { c.fillStyle = T.cap.id === 'white' ? '#1f46c8' : '#fff'; c.save(); c.beginPath(); c.arc(X, Y + bob, r, 0, 6.3); c.clip(); c.fillRect(X - r * 0.22, Y + bob - r, r * 0.44, r * 2); c.restore(); }
+      if (!p.gk && T.style === 'panels') { c.fillStyle = T.cap.id === 'white' ? '#9db8f2' : '#bbb'; c.save(); c.beginPath(); c.arc(X, Y + bob, r, 0, 6.3); c.clip(); c.fillRect(X, Y + bob - r, r, r * 2); c.restore(); }
+      c.fillStyle = p.team === 0 ? '#e5383b' : '#fff'; // Ohrenschützer
+      const ex = Math.cos(p.face + Math.PI / 2) * r, ey = Math.sin(p.face + Math.PI / 2) * r;
+      c.beginPath(); c.arc(X + ex, Y + bob + ey, r * 0.28, 0, 6.3); c.arc(X - ex, Y + bob - ey, r * 0.28, 0, 6.3); c.fill();
+      c.strokeStyle = 'rgba(0,0,0,0.45)'; c.lineWidth = 1; c.beginPath(); c.arc(X, Y + bob, r, 0, 6.3); c.stroke();
+      c.fillStyle = (!p.gk && (T.style !== 'classic')) ? '#101830' : ink; c.font = 'bold ' + Math.round(r * 1.1) + 'px system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText(p.num, X - (T.style === 'stripe' && !p.gk ? r * 0.0 : 0), Y + bob + 1);
+    }
+
+    ball(c, g) {
+      const b = g.ball, s = this.s, X = this.X(b.x), Y = this.Y(b.y), r = Math.max(4, s * C.BR * 1.35 * (1 + b.z * 0.25));
+      c.fillStyle = 'rgba(0,0,0,0.25)'; c.beginPath(); c.ellipse(X + b.z * 5, Y + b.z * 7 + 2, r, r * 0.75, 0, 0, 6.3); c.fill();
+      const cy = Y - b.z * s * 0.35;
+      c.save(); c.beginPath(); c.arc(X, cy, r, 0, 6.3); c.clip();
+      c.fillStyle = '#f5c518'; c.fillRect(X - r, cy - r, r * 2, r * 2);
+      c.fillStyle = '#d7263d'; c.fillRect(X - r, cy - r, r * 0.9, r * 2);
+      c.fillStyle = '#2748b8'; c.fillRect(X + r * 0.1, cy - r, r, r * 0.9);
+      c.restore(); c.strokeStyle = '#222'; c.lineWidth = 1; c.beginPath(); c.arc(X, cy, r, 0, 6.3); c.stroke();
+    }
+
+    selMark(c, g, p) {
+      const s = this.s, X = this.X(p.x), Y = this.Y(p.y);
+      c.strokeStyle = '#fff'; c.lineWidth = 2; c.setLineDash([5, 4]); c.beginPath(); c.arc(X, Y, s * 0.62, 0, 6.3); c.stroke(); c.setLineDash([]);
+      c.fillStyle = '#ffe14d'; c.beginPath(); c.moveTo(X, Y - s * 0.75); c.lineTo(X - 6, Y - s * 0.75 - 11); c.lineTo(X + 6, Y - s * 0.75 - 11); c.closePath(); c.fill();
+      c.fillStyle = 'rgba(0,0,0,0.55)'; c.fillRect(X - 15, Y + s * 0.72, 30, 4); c.fillStyle = p.st > 0.3 ? '#5be37d' : '#ff6b6b'; c.fillRect(X - 15, Y + s * 0.72, 30 * p.st, 4);
+    }
+    aimLine(c, g, ui) {
+      const p = g.sel, X = this.X(p.x), Y = this.Y(p.y), ax = this.X(g.input.aimX), ay = this.Y(g.input.aimY);
+      c.strokeStyle = 'rgba(255,255,255,0.5)'; c.setLineDash([4, 6]); c.beginPath(); c.moveTo(X, Y); c.lineTo(ax, ay); c.stroke(); c.setLineDash([]);
+      c.strokeStyle = '#fff'; c.beginPath(); c.arc(ax, ay, 7, 0, 6.3); c.moveTo(ax - 11, ay); c.lineTo(ax + 11, ay); c.moveTo(ax, ay - 11); c.lineTo(ax, ay + 11); c.stroke();
+      if (g.charge > 0) {
+        c.fillStyle = 'rgba(0,0,0,0.55)'; c.fillRect(X - 28, Y + this.s * 0.95, 56, 7);
+        c.fillStyle = g.charge > 0.85 ? '#ff6b6b' : '#ffe14d'; c.fillRect(X - 28, Y + this.s * 0.95, 56 * g.charge, 7);
+      }
+    }
+
+    hud(c, g, ui) {
+      const w = this.cw, t0 = g.teams[0], t1 = g.teams[1];
+      c.textBaseline = 'middle'; c.textAlign = 'center';
+      c.fillStyle = 'rgba(8,16,32,0.88)'; this.rr(c, w / 2 - 190, 6, 380, 46, 10); c.fill();
+      const dot = (x, T) => { c.fillStyle = T.cap.hex; c.beginPath(); c.arc(x, 29, 9, 0, 6.3); c.fill(); c.strokeStyle = '#000'; c.lineWidth = 1; c.stroke(); };
+      dot(w / 2 - 170, t0); dot(w / 2 + 170, t1);
+      c.fillStyle = '#fff'; c.font = '600 13px system-ui'; c.textAlign = 'left'; c.fillText(t0.def.short, w / 2 - 154, 29); c.textAlign = 'right'; c.fillText(t1.def.short, w / 2 + 154, 29);
+      c.textAlign = 'center'; c.font = '800 28px system-ui'; c.fillText(t0.score + ' : ' + t1.score, w / 2, 24);
+      c.font = '600 11px system-ui'; c.fillStyle = '#9fb4d3';
+      c.fillText(g.phase === 'shootout' ? 'Penaltyschießen' : g.quarter + '. Viertel · ' + U.fmtClock(g.clock), w / 2, 43);
+      // Angriffszeit
+      if (g.poss >= 0 && g.phase !== 'shootout') {
+        const sc = Math.max(0, Math.ceil(g.shotClock)); c.fillStyle = sc <= 5 ? '#ff5d5d' : '#ffd166';
+        c.fillStyle = 'rgba(8,16,32,0.88)'; this.rr(c, w / 2 - 28, 56, 56, 24, 8); c.fill();
+        c.fillStyle = sc <= 5 ? '#ff5d5d' : '#ffd166'; c.font = '800 16px system-ui'; c.fillText(sc, w / 2, 69);
+        c.fillStyle = g.teams[g.poss].cap.hex; c.beginPath(); c.arc(w / 2 - 20, 68, 4, 0, 6.3); c.fill();
+      }
+      // Hinausstellungen
+      for (let t = 0; t < 2; t++) {
+        const list = g.teams[t].players.filter(p => !p.inPool && p.excl > 0);
+        list.forEach((p, i) => {
+          const x = t === 0 ? 14 : w - 14; c.textAlign = t === 0 ? 'left' : 'right';
+          c.fillStyle = 'rgba(8,16,32,0.85)'; const bw = 118; this.rr(c, t === 0 ? x : x - bw, 60 + i * 24, bw, 20, 6); c.fill();
+          c.fillStyle = '#ff8a8a'; c.font = '600 12px system-ui'; c.fillText((p.perm ? '✖ ' : '⏱ ') + '#' + p.num + ' ' + (p.excl > 99 ? 'Sperre' : Math.ceil(p.excl) + ' s'), t === 0 ? x + 8 : x - 8, 70 + i * 24);
+        });
+        c.textAlign = t === 0 ? 'left' : 'right'; c.fillStyle = '#9fb4d3'; c.font = '11px system-ui';
+        c.fillText('Auszeiten: ' + g.teams[t].timeouts + '  Fouls: ' + g.teams[t].players.reduce((a, p) => a + p.fouls, 0), t === 0 ? 14 : w - 14, 22);
+      }
+      // Hinweis & Nachricht
+      c.textAlign = 'center';
+      if (g.message.t > 0) {
+        const m = g.message.text; c.font = '700 20px system-ui'; const tw = c.measureText(m).width + 36;
+        c.fillStyle = 'rgba(8,16,32,0.9)'; this.rr(c, w / 2 - tw / 2, this.ch - 64, tw, 38, 10); c.fill(); c.fillStyle = '#fff'; c.fillText(m, w / 2, this.ch - 45);
+      }
+      if (g.phase === 'restart' && g.rs) {
+        const tx = { free: 'Freiwurf', corner: 'Eckball', throw: 'Torabwurf', penalty: 'Strafwurf' }[g.rs.type] || '';
+        c.fillStyle = '#ffd166'; c.font = '700 14px system-ui';
+        c.fillText(tx + ' ' + g.teams[g.rs.team].def.short + (g.rs.team === 0 ? ' – Pass: Rechtsklick/E · Wurf: Klick' : ''), w / 2, this.ch - 84);
+        if (g.rs.type === 'penalty' && g.rs.team === 1) c.fillText('Torwart: W/S = oben/unten, Leertaste = Mitte', w / 2, this.ch - 104);
+        if (g.rs.team === 0 && g.rs.type === 'free' && g.freeNoShot) { c.fillStyle = '#ff9d9d'; c.fillText('Innerhalb 6 m: nicht direkt aufs Tor – erst passen!', w / 2, this.ch - 104); }
+      }
+      if (g.phase === 'swim') { c.fillStyle = '#fff'; c.font = '800 26px system-ui'; c.fillText(g.pt > 0 ? 'Bereit…' : 'Sprint zum Ball!', w / 2, this.ch - 84); }
+      if (g.phase === 'shootout' && g.so) {
+        const so = g.so; c.font = '700 15px system-ui';
+        for (let t = 0; t < 2; t++) {
+          let x = w / 2 - 80, y = 100 + t * 24; c.textAlign = 'right'; c.fillStyle = '#fff'; c.fillText(g.teams[t].def.short, x - 10, y);
+          c.textAlign = 'center';
+          for (let i = 0; i < Math.max(5, so.log[t].length); i++) {
+            c.beginPath(); c.arc(x + i * 22, y, 8, 0, 6.3);
+            c.fillStyle = i < so.log[t].length ? (so.log[t][i] ? '#4cd964' : '#ff5d5d') : 'rgba(255,255,255,0.2)'; c.fill();
+          }
+        }
+        c.fillStyle = '#ffd166'; c.textAlign = 'center';
+        if (so.state === 'aim') c.fillText(so.turn === 0 ? 'Du schießt: Maus zielen, Klick halten = höher, loslassen = Wurf' : 'Gegner schießt – Torwart: W/S = oben/unten, Leertaste = Mitte', w / 2, this.ch - 84);
+      }
+    }
+    rr(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+  }
+  WP.Renderer = Renderer;
+})();
+
+</script>
+<script>
+// Menü, Eingabe, Hauptschleife
+(function () {
+  const WP = globalThis.WP, C = WP.C;
+  const $ = (id) => document.getElementById(id);
+  const cv = $('cv'), R = new WP.Renderer(cv);
+  let game = null, paused = false, running = false, last = 0, acc = 0;
+  const keys = {};
+
+  // ---------- Menü ----------
+  const fill = (el, items, fn, sel) => { el.innerHTML = ''; items.forEach((it, i) => { const o = document.createElement('option'); o.value = fn.v(it, i); o.textContent = fn.t(it); el.appendChild(o); }); if (sel !== undefined) el.value = sel; };
+  fill($('selHome'), WP.TEAMS, { v: (t, i) => i, t: t => t.name }, 0);
+  fill($('selAway'), WP.TEAMS, { v: (t, i) => i, t: t => t.name }, 1);
+  fill($('selCap'), WP.CAPS.slice(0, 6), { v: c => c.id, t: c => c.name }, 'white');
+  fill($('selStyle'), WP.CAP_STYLES, { v: s => s.id, t: s => s.name }, 'classic');
+  fill($('selDiff'), Object.keys(WP.DIFFICULTY), { v: k => k, t: k => WP.DIFFICULTY[k].name }, 'normal');
+  fill($('selLen'), WP.QUARTER_REAL, { v: q => q.id, t: q => q.name }, 180);
+
+  function capEl(hex, ink, style, num, label) {
+    const d = document.createElement('div'); d.className = 'pv';
+    const c = document.createElement('div'); c.className = 'cap'; c.style.background = hex; c.style.color = ink; c.textContent = num;
+    if (style === 'stripe') c.style.background = 'linear-gradient(90deg,' + hex + ' 40%,#1f46c8 40%,#1f46c8 60%,' + hex + ' 60%)';
+    if (style === 'panels') c.style.background = 'linear-gradient(90deg,' + hex + ' 50%,#9db8f2 50%)';
+    if (style !== 'classic' && num !== 1) c.style.color = '#101830';
+    d.appendChild(c); d.appendChild(document.createTextNode(label)); return d;
+  }
+  function preview() {
+    const p = $('preview'); p.innerHTML = '';
+    const cap = WP.CAPS.find(c => c.id === $('selCap').value), st = $('selStyle').value;
+    p.appendChild(capEl(cap.hex, cap.ink, st, 7, 'Feldspieler'));
+    p.appendChild(capEl(WP.GK_CAP.hex, WP.GK_CAP.ink, 'classic', 1, 'Torwart'));
+    const blue = cap.id === 'blue' || cap.id === 'navy' ? WP.CAPS[0] : WP.CAPS[1];
+    p.appendChild(capEl(blue.hex, blue.ink, 'classic', 5, 'Gegner'));
+  }
+  ['selCap', 'selStyle'].forEach(i => $(i).addEventListener('change', preview)); preview();
+
+  function info(title, rows) {
+    $('infoTitle').textContent = title;
+    $('infoBody').innerHTML = '<table>' + rows.map(r => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('') + '</table>';
+    $('info').classList.remove('hidden');
+  }
+  $('btnRules').onclick = () => info('Wasserball-Regeln im Spiel', WP.RULES_TEXT);
+  $('btnControls').onclick = () => info('Steuerung', WP.CONTROLS_TEXT);
+  $('btnInfoClose').onclick = () => $('info').classList.add('hidden');
+
+  function start() {
+    let h = +$('selHome').value, a = +$('selAway').value;
+    if (h === a) a = (h + 1) % WP.TEAMS.length;
+    WP.Audio.init(); WP.Audio.resume();
+    game = new WP.Game({ home: h, away: a, cap: $('selCap').value, style: $('selStyle').value, diff: $('selDiff').value, quarterReal: +$('selLen').value });
+    ['menu', 'result', 'pause'].forEach(i => $(i).classList.add('hidden'));
+    paused = false; running = true; last = performance.now(); R.resize();
+  }
+  $('btnStart').onclick = start; $('btnAgain').onclick = start;
+  const toMenu = () => { running = false; game = null; ['pause', 'result'].forEach(i => $(i).classList.add('hidden')); $('menu').classList.remove('hidden'); };
+  $('btnMenu').onclick = toMenu; $('btnQuit').onclick = toMenu;
+  $('btnResume').onclick = () => setPause(false);
+  $('btnSound').onclick = () => { WP.Audio.setEnabled(!WP.Audio.isEnabled()); $('btnSound').textContent = WP.Audio.isEnabled() ? '🔊 Ton an' : '🔇 Ton aus'; };
+  function setPause(v) { if (!game || game.finished) return; paused = v; $('pause').classList.toggle('hidden', !v); last = performance.now(); }
+
+  // ---------- Eingabe ----------
+  const I = () => game && game.input;
+  function updMove() {
+    const i = I(); if (!i) return;
+    i.mx = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+    i.my = (keys.KeyS || keys.ArrowDown ? 1 : 0) - (keys.KeyW || keys.ArrowUp ? 1 : 0);
+    i.sprint = !!(keys.ShiftLeft || keys.ShiftRight);
+  }
+  addEventListener('keydown', (e) => {
+    if (!game) return;
+    if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+    if (e.repeat) { keys[e.code] = true; updMove(); return; }
+    keys[e.code] = true; const i = I();
+    if (e.code === 'Escape' || e.code === 'KeyP') return setPause(!paused);
+    if (e.code === 'Space') { i.tackle = true; game.diveSel = 0; }
+    if (e.code === 'KeyE') i.pass = true;
+    if (e.code === 'KeyF') i.fake = true;
+    if (e.code === 'KeyQ' || e.code === 'Tab') i.switchP = true;
+    if (e.code === 'KeyX') i.sub = true;
+    if (e.code === 'KeyT') i.timeout = true;
+    if (e.code === 'KeyW' || e.code === 'ArrowUp') game.diveSel = -1;
+    if (e.code === 'KeyS' || e.code === 'ArrowDown') game.diveSel = 1;
+    updMove();
+  });
+  addEventListener('keyup', (e) => { keys[e.code] = false; updMove(); });
+  cv.addEventListener('mousemove', (e) => {
+    if (!game) return; const r = cv.getBoundingClientRect(), w = R.toWorld(e.clientX - r.left, e.clientY - r.top);
+    game.input.aimX = w.x; game.input.aimY = w.y;
+  });
+  cv.addEventListener('mousedown', (e) => {
+    if (!game || paused) return; WP.Audio.resume();
+    if (e.button === 0) game.input.shootHeld = true;
+    if (e.button === 2) game.input.pass = true;
+  });
+  addEventListener('mouseup', (e) => { if (game && e.button === 0 && game.input.shootHeld) { game.input.shootHeld = false; game.input.shootRelease = true; } });
+  cv.addEventListener('contextmenu', (e) => e.preventDefault());
+  addEventListener('resize', () => R.resize());
+  addEventListener('blur', () => { for (const k in keys) keys[k] = false; if (game) updMove(); setPause(true); });
+
+  // ---------- Schleife ----------
+  function showResult() {
+    const g = game, a = g.teams[0], b = g.teams[1];
+    $('resTitle').textContent = g.winner === 0 ? '🏆 Sieg für ' + a.def.name + '!' : g.winner === 1 ? 'Niederlage gegen ' + b.def.name : 'Unentschieden';
+    $('resScore').textContent = a.score + ' : ' + b.score + (g.so ? '  (' + g.so.goals[0] + ':' + g.so.goals[1] + ' n.E.)' : '');
+    const rows = [['Schüsse', a.stats.shots, b.stats.shots], ['Paraden', a.stats.saves, b.stats.saves], ['Fouls', a.stats.fouls, b.stats.fouls],
+      ['Hinausstellungen', a.stats.excl, b.stats.excl], ['Strafwürfe', a.stats.pens, b.stats.pens], ['Ballbesitz (s)', Math.round(a.stats.poss), Math.round(b.stats.poss)]];
+    const scorers = (T) => T.players.filter(p => p.goals).map(p => '#' + p.num + ' ' + p.name + ' ' + p.goals).join(', ') || '–';
+    rows.push(['Torschützen', scorers(a), scorers(b)]);
+    $('resStats').innerHTML = '<div class="stat"><b>' + a.def.short + '</b><span></span><b>' + b.def.short + '</b></div>' + rows.map(r => '<div class="stat"><span>' + r[1] + '</span><span style="color:#9fb4d3">' + r[0] + '</span><span>' + r[2] + '</span></div>').join('');
+    $('result').classList.remove('hidden');
+  }
+  function loop(now) {
+    requestAnimationFrame(loop);
+    if (!game) { R.draw(WP.idle || (WP.idle = new WP.Game({ home: 0, away: 1, auto: true, quarterReal: 90 })), 0.016, null); WP.idle.update(0.016); return; }
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (running && !paused && !game.finished) { acc += dt; let n = 0; while (acc >= 1 / 60 && n++ < 4) { game.update(1 / 60); acc -= 1 / 60; } if (game.finished && $('result').classList.contains('hidden')) setTimeout(showResult, 1200); }
+    R.draw(game, paused ? 0 : dt, { aim: true });
+  }
+  requestAnimationFrame(loop);
+  WP.debug = { get game() { return game; } };
+})();
+
+</script>
+</body>
+</html>
